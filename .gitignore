@@ -1,0 +1,32 @@
+# Virtual environment
+venv/
+.venv/
+env/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# SQLite database (generated at runtime)
+*.db
+*.db-journal
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Sensitive / large data files — add new Excel files to data/ locally
+# but don't commit real patient/business data to git
+# data/*.xls
+# data/*.xlsx
+# Uncomment above lines if you want to keep data files out of git.
+# For now they are included so the app works out of the box.
+
+# Logs
+*.log
