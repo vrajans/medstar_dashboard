@@ -207,6 +207,7 @@ migrate_table(purchase_df, "purchases", args.truncate)
 # SQLite auth.py uses column name "active"; PostgreSQL schema uses "is_active"
 if "active" in users_df.columns and "is_active" not in users_df.columns:
     users_df = users_df.rename(columns={"active": "is_active"})
+# SQLite stores booleans as integers; PostgreSQL requires true booleans
 users_df["is_active"] = users_df["is_active"].astype(bool)
 migrate_table(users_df,    "users",     args.truncate)
 

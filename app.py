@@ -26,7 +26,7 @@ from pdf_report  import generate_pdf
 from auth        import init_auth, authenticate, list_users, create_user, \
                         update_user_role, deactivate_user, reactivate_user, reset_password
 from login_page     import render_login
-from tenant_portal  import render_tenants_tab, call_api, MODULE_LABELS
+from tenant_portal  import render_tenants_tab, call_api, MODULE_LABELS, API_BASE
 
 # ── Load pharmacy data ────────────────────────────────────────
 sales_df, purchase_df, engine = get_data()
@@ -322,7 +322,7 @@ def login_route():
             # Also obtain a FastAPI JWT so tenant_portal.call_api() works
             try:
                 api_resp = _req.post(
-                    "http://127.0.0.1:8000/auth/login",
+                    f"{API_BASE}/auth/login",
                     json={"username": username_val, "password": password},
                     timeout=5,
                 )
@@ -344,7 +344,7 @@ def logout_route():
         access_tok = flask_session.get("api_access_token")
         try:
             _req.post(
-                "http://127.0.0.1:8000/auth/logout",
+                f"{API_BASE}/auth/logout",
                 json={"refresh_token": refresh_tok},
                 headers={"Authorization": f"Bearer {access_tok}"} if access_tok else {},
                 timeout=3,
