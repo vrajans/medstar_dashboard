@@ -5,6 +5,7 @@ Run:  python app.py   then open  http://127.0.0.1:8050
 """
 
 import io
+import threading
 from io import BytesIO
 from datetime import date, timedelta
 
@@ -305,6 +306,14 @@ import os as _os
 app.server.secret_key = _os.environ.get("FLASK_SECRET_KEY", "insighthub-secret-change-in-prod-2026")
 
 # ── Flask auth routes ─────────────────────────────────────────
+
+def _warm_up_api():
+    """Background ping to wake the FastAPI service (free tier spins down after 15 min)."""
+    try:
+        _req.get(f"{API_BASE}/docs", timeout=90)
+    except Exception:
+        pass
+
 @app.server.route("/login", methods=["GET","POST"])
 def login_route():
     if current_user.is_authenticated:
@@ -312,6 +321,9 @@ def login_route():
     error = None
     username_val = ""
     next_url = request.args.get("next", "/")
+    if request.method == "GET":
+        # Pre-warm the FastAPI service in background so it's ready by login time
+        threading.Thread(target=_warm_up_api, daemon=True).start()
     if request.method == "POST":
         username_val = request.form.get("username","").strip()
         password     = request.form.get("password","")
@@ -324,14 +336,16 @@ def login_route():
                 api_resp = _req.post(
                     f"{API_BASE}/auth/login",
                     json={"username": username_val, "password": password},
-                    timeout=5,
+                    timeout=45,  # free tier may take 30-60s to wake up
                 )
                 if api_resp.ok:
                     api_data = api_resp.json()
                     flask_session["api_access_token"]  = api_data.get("access_token")
                     flask_session["api_refresh_token"] = api_data.get("refresh_token")
-            except Exception:
-                pass  # non-fatal: Tenants tab will show 0 until re-login
+                else:
+                    print(f"[Auth] FastAPI JWT bridge failed: {api_resp.status_code} {api_resp.text[:200]}")
+            except Exception as _jwt_err:
+                print(f"[Auth] FastAPI JWT bridge error: {_jwt_err}")
             return redirect(next_url or "/")
         error = "Invalid username or password."
     return render_login(error=error, next_url=next_url, username_val=username_val)

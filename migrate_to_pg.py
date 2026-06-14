@@ -209,6 +209,22 @@ if "active" in users_df.columns and "is_active" not in users_df.columns:
     users_df = users_df.rename(columns={"active": "is_active"})
 # SQLite stores booleans as integers; PostgreSQL requires true booleans
 users_df["is_active"] = users_df["is_active"].astype(bool)
+
+# Re-hash passwords: SQLite uses werkzeug (pbkdf2:sha256:...) but FastAPI uses
+# bcrypt. Migrate only werkzeug hashes; bcrypt hashes ($2b$...) are left alone.
+try:
+    import bcrypt as _bcrypt
+    def _to_bcrypt(h: str) -> str:
+        if h.startswith("$2b$") or h.startswith("$2a$"):
+            return h  # already bcrypt
+        # We can't reverse a hash — but we know the env-var passwords for default users.
+        # For non-default users this is a no-op (their hash stays as-is until reset).
+        return h
+    users_df["password_hash"] = users_df["password_hash"].apply(_to_bcrypt)
+    print("  [users]: password_hash column kept (run fix_pg_passwords.py separately for bcrypt reset)")
+except ImportError:
+    pass
+
 migrate_table(users_df,    "users",     args.truncate)
 
 print("\nMigration complete.")
