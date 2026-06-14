@@ -31,5 +31,5 @@ Thumbs.db
 # Logs
 *.log
 
-# Environment secrets — never commit real credentials
+# Environment secrets — NEVER commit this
 .env

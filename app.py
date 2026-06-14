@@ -301,7 +301,8 @@ app = dash.Dash(
 # ── Init auth (must happen after app is created) ──────────────
 from data_loader import DB_PATH
 auth_engine = init_auth(app.server, DB_PATH)
-app.server.secret_key = "insighthub-secret-change-in-prod-2026"
+import os as _os
+app.server.secret_key = _os.environ.get("FLASK_SECRET_KEY", "insighthub-secret-change-in-prod-2026")
 
 # ── Flask auth routes ─────────────────────────────────────────
 @app.server.route("/login", methods=["GET","POST"])
@@ -1404,6 +1405,9 @@ def save_mappings(n, store, entity, values, ids):
     detail = data.get("detail", "Error") if isinstance(data, dict) else str(data)
     return dbc.Alert(f"Error: {detail}", color="danger", dismissable=True)
 
+
+# Expose Flask server for gunicorn (Render.com / production)
+server = app.server
 
 # ── Run ──────────────────────────────────────────────────────────
 if __name__ == "__main__":
