@@ -49,18 +49,6 @@ input[type=text]:focus,input[type=password]:focus{
   color:#dc2626;font-size:0.8rem;padding:0.55rem 0.9rem;
   margin-top:1rem;display:flex;align-items:center;gap:6px;
 }
-.divider{
-  display:flex;align-items:center;gap:10px;margin:1.5rem 0 1.2rem;
-}
-.divider::before,.divider::after{
-  content:'';flex:1;height:1px;background:#e2e8f0;
-}
-.divider span{font-size:0.72rem;color:#94a3b8;white-space:nowrap}
-.defaults{
-  background:#f0fdf4;border:1px solid #a8d5a8;border-radius:8px;
-  padding:0.55rem 0.9rem;font-size:0.74rem;color:#166534;line-height:1.7;
-}
-.defaults strong{font-weight:700}
 .footer{text-align:center;margin-top:1.6rem;font-size:0.7rem;color:#cbd5e1}
 </style>
 </head>
@@ -85,12 +73,6 @@ input[type=text]:focus,input[type=password]:focus{
 
     <button type="submit" class="btn">Sign In &rarr;</button>
   </form>
-
-  <div class="divider"><span>Default credentials</span></div>
-  <div class="defaults">
-    <strong>Admin</strong> &nbsp;username: <code>admin</code> &nbsp; password: <code>admin123</code><br/>
-    <strong>Viewer</strong> &nbsp;username: <code>viewer</code> &nbsp; password: <code>viewer123</code>
-  </div>
 
   <div class="footer">MedStar Pharmacy &mdash; Confidential &mdash; InsightHub v1.0</div>
 </div>

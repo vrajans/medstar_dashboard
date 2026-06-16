@@ -255,7 +255,7 @@ def make_sidebar():
                 id="filter-date",
                 start_date=str(data_min), end_date=str(data_max),
                 min_date_allowed="2020-01-01", max_date_allowed="2030-12-31",
-                display_format="DD MMM YYYY", style={"width":"100%"},
+                display_format="DD MMM YY", style={"width":"100%"},
             ),
             className="date-picker-wrap", style={"marginBottom":"0.75rem"},
         ),
@@ -408,13 +408,16 @@ app.layout = html.Div([
                         className="custom-tab", selected_className="custom-tab--selected"),
                 dcc.Tab(label="Upload Data",    value="upload",
                         id="tab-upload",
-                        className="custom-tab", selected_className="custom-tab--selected"),
+                        className="custom-tab", selected_className="custom-tab--selected",
+                        style={"display":"none"}),
                 dcc.Tab(label="Users",          value="users",
                         id="tab-users",
-                        className="custom-tab", selected_className="custom-tab--selected"),
+                        className="custom-tab", selected_className="custom-tab--selected",
+                        style={"display":"none"}),
                 dcc.Tab(label="Tenants",        value="tenants",
                         id="tab-tenants",
-                        className="custom-tab", selected_className="custom-tab--selected"),
+                        className="custom-tab", selected_className="custom-tab--selected",
+                        style={"display":"none"}),
             ]),
             html.Div(id="tab-content", style={"padding":"1rem 0.5rem"}),
         ], style={"flex":1,"padding":"0.5rem 1rem","overflowY":"auto"}),
@@ -422,27 +425,44 @@ app.layout = html.Div([
 ])
 
 # ── Navbar user info callback ─────────────────────────────────
+_TAB_SHOW = {}               # visible
+_TAB_HIDE = {"display":"none"}  # hidden
+
 @app.callback(
     Output("navbar-user-info", "children"),
-    Output("tab-upload",       "disabled"),
-    Output("tab-users",        "disabled"),
-    Output("tab-tenants",      "disabled"),
+    Output("tab-upload",       "style"),
+    Output("tab-users",        "style"),
+    Output("tab-tenants",      "style"),
     Input("data-version",      "data"),
 )
 def update_navbar_user(_v):
     try:
-        is_admin = current_user.is_authenticated and current_user.is_admin()
-        display  = current_user.display_name if current_user.is_authenticated else "Guest"
-        role     = current_user.role_label   if current_user.is_authenticated else ""
-        role_col = current_user.role_color   if current_user.is_authenticated else C_BLUE
+        u           = current_user
+        authed      = u.is_authenticated
+        is_admin    = authed and u.is_admin()
+        is_tenant   = authed and u.is_tenant_user()
+        display     = u.display_name if authed else "Guest"
+        role        = u.role_label   if authed else ""
+        role_col    = u.role_color   if authed else C_BLUE
+        tenant_name = u.tenant_name  if (authed and is_tenant) else None
     except Exception:
-        is_admin = False
-        display  = "Guest"
-        role     = ""
-        role_col = C_BLUE
+        is_admin  = False
+        is_tenant = False
+        display   = "Guest"
+        role      = ""
+        role_col  = C_BLUE
+        tenant_name = None
+
+    # Subtitle for tenant users
+    subtitle = []
+    if tenant_name:
+        subtitle = [html.Span(f"│ {tenant_name}",
+                              style={"fontSize":"0.72rem","color":"rgba(255,255,255,0.65)",
+                                     "marginLeft":"4px"})]
 
     user_info = html.Div([
         html.Span(display, style={"fontSize":"0.8rem","fontWeight":600,"color":"white"}),
+        *subtitle,
         html.Span(role,
                   style={"fontSize":"0.65rem","fontWeight":700,"padding":"2px 7px",
                          "borderRadius":"20px","background":"rgba(255,255,255,0.2)",
@@ -453,8 +473,15 @@ def update_navbar_user(_v):
                       "paddingLeft":"10px","marginLeft":"2px"}),
     ], style={"display":"flex","alignItems":"center","gap":"8px"})
 
-    # Disable tabs for viewer; Tenants tab is admin-only too
-    return user_info, not is_admin, not is_admin, not is_admin
+    # Tab visibility rules:
+    # Upload Data → MedStar internal admin only
+    # Users       → any admin (including tenant admin)
+    # Tenants     → MedStar internal admin only
+    upload_style  = _TAB_SHOW if (is_admin and not is_tenant) else _TAB_HIDE
+    users_style   = _TAB_SHOW if is_admin else _TAB_HIDE
+    tenants_style = _TAB_SHOW if (is_admin and not is_tenant) else _TAB_HIDE
+
+    return user_info, upload_style, users_style, tenants_style
 
 # ── Quick-select ──────────────────────────────────────────────
 @app.callback(
@@ -480,6 +507,35 @@ def apply_quick_select(n_this, n_last, n_3m, n_all):
         s, e = _data_date_bounds()
     return str(s), str(e)
 
+# ── Tenant welcome page (shown instead of analytics to tenant users) ──────────
+def _render_tenant_welcome(tenant_name):
+    tname = tenant_name or "Your Organisation"
+    return html.Div([
+        html.Div([
+            html.Div("🏢", style={"fontSize":"4rem","marginBottom":"0.5rem"}),
+            html.H2(f"Welcome, {tname}",
+                    style={"color":C_GREEN,"fontWeight":700,"marginBottom":"0.5rem"}),
+            html.P(
+                "Your tenant portal is active. "
+                "Use the Tenants tab to view your account details and configured modules.",
+                style={"color":"#64748b","fontSize":"0.95rem","maxWidth":"480px",
+                       "margin":"0 auto","lineHeight":1.6}
+            ),
+            html.Hr(style={"margin":"2rem auto","width":"80px",
+                           "border":"none","borderTop":"2px solid #e2e8f0"}),
+            html.Div([
+                html.Div([
+                    html.Span("🔒", style={"fontSize":"1.4rem"}),
+                    html.P("Analytics data is restricted to MedStar internal users.",
+                           style={"fontSize":"0.8rem","color":"#94a3b8","margin":"4px 0 0"}),
+                ], style={"textAlign":"center","padding":"1rem",
+                          "background":"#f8fafc","borderRadius":"12px",
+                          "border":"1px solid #e2e8f0","maxWidth":"320px","margin":"0 auto"}),
+            ]),
+        ], style={"textAlign":"center","padding":"4rem 2rem"}),
+    ], style={"minHeight":"60vh","display":"flex","alignItems":"center","justifyContent":"center"})
+
+
 # ── Tab router ────────────────────────────────────────────────
 @app.callback(
     Output("tab-content",         "children"),
@@ -496,12 +552,27 @@ def apply_quick_select(n_this, n_last, n_3m, n_all):
 def render_tab(tab, branch, start_date, end_date, _version):
     # Role guard — redirect viewers away from admin-only tabs
     try:
-        is_admin = current_user.is_authenticated and current_user.is_admin()
+        is_admin    = current_user.is_authenticated and current_user.is_admin()
+        is_tenant   = current_user.is_authenticated and current_user.is_tenant_user()
+        tenant_name = current_user.tenant_name if is_tenant else None
     except Exception:
-        is_admin = False
+        is_admin    = False
+        is_tenant   = False
+        tenant_name = None
 
     if tab in ("upload","users") and not is_admin:
         tab = "overview"
+
+    # ── Tenant data fence ────────────────────────────────────────
+    # External tenant users (e.g. Right Pharmacy) must never see MedStar's
+    # internal sales/purchase analytics. Show them a dedicated welcome page.
+    _analytics_tabs = ("overview", "sales", "purchases", "compare", "upload")
+    if is_tenant and tab in _analytics_tabs:
+        welcome = _render_tenant_welcome(tenant_name)
+        # Return early with safe empty values for sidebar/navbar outputs
+        branches = get_filter_options()
+        b_opts   = [{"label":b,"value":b} for b in branches]
+        return welcome, b_opts, [], html.Div(), ""
 
     branches = get_filter_options()
     b_opts   = [{"label":b,"value":b} for b in branches]
@@ -684,7 +755,7 @@ def render_sales(branch, start_date, end_date):
         labels={"_month":"Month","amount":"Sales (Rs.)","cat":"Category"},title="Pharma vs Non-Pharma")
     fig_ph.update_layout(**CHART_LAYOUT)
 
-    ret = s[s.get("cash_return",pd.Series([0])>0)].sort_values("bill_date") if "cash_return" in s.columns else pd.DataFrame()
+    ret = s[s["cash_return"] > 0].sort_values("bill_date") if "cash_return" in s.columns else pd.DataFrame()
     fig_ret = (px.bar(ret,x="bill_date",y="cash_return",color="branch",color_discrete_map=BCM,
         labels={"bill_date":"Date","cash_return":"Return (Rs.)"},title="Daily Returns")
         if not ret.empty else go.Figure())
@@ -889,9 +960,20 @@ def render_users_tab():
         {"name":"Username",     "id":"username"},
         {"name":"Display Name", "id":"display_name"},
         {"name":"Role",         "id":"role"},
+        {"name":"Tenant",       "id":"tenant_name"},
         {"name":"Active",       "id":"active"},
         {"name":"Created",      "id":"created_at"},
     ]
+
+    # Fetch tenants from FastAPI for the tenant dropdown
+    _, tenants_resp = call_api("GET", "/tenants")
+    tenant_options = [{"label": "— None —", "value": ""}]
+    if isinstance(tenants_resp, list):
+        tenant_options += [
+            {"label": t.get("name", ""), "value": f"{t.get('id','')}|{t.get('name','')}"}
+            for t in tenants_resp
+        ]
+
     return html.Div([
         html.Div([html.Span(className="accent"),html.Span("User Management")],className="section-heading"),
         html.Div("\U0001f6e1️  Only Admins can access this page. Viewer accounts cannot upload data or manage users.",
@@ -910,7 +992,7 @@ def render_users_tab():
                 style_data_conditional=[
                     {"if":{"filter_query":"{role} = admin"},
                      "fontWeight":"600","color":C_GREEN},
-                    {"if":{"filter_query":"{active} = 0"},
+                    {"if":{"filter_query":'{active} = "No"'},
                      "color":"#94a3b8","fontStyle":"italic"},
                 ],
                 row_selectable="single",
@@ -935,9 +1017,9 @@ def render_users_tab():
             html.Div("Add New User",className="chart-card-title"),
             dbc.Row([
                 dbc.Col([html.Div("Username",className="sidebar-label"),
-                         dbc.Input(id="new-username",placeholder="username",debounce=True,style={"fontSize":"0.85rem"})],md=3),
+                         dbc.Input(id="new-username",placeholder="username",debounce=True,style={"fontSize":"0.85rem"})],md=2),
                 dbc.Col([html.Div("Display Name",className="sidebar-label"),
-                         dbc.Input(id="new-display",placeholder="Full Name",debounce=True,style={"fontSize":"0.85rem"})],md=3),
+                         dbc.Input(id="new-display",placeholder="Full Name",debounce=True,style={"fontSize":"0.85rem"})],md=2),
                 dbc.Col([html.Div("Password",className="sidebar-label"),
                          dbc.Input(id="new-password",placeholder="password",type="password",debounce=True,style={"fontSize":"0.85rem"})],md=2),
                 dbc.Col([html.Div("Role",className="sidebar-label"),
@@ -945,6 +1027,12 @@ def render_users_tab():
                              options=[{"label":"Admin","value":"admin"},
                                       {"label":"Viewer","value":"viewer"}],
                              value="viewer",clearable=False,style={"fontSize":"0.85rem"})],md=2),
+                dbc.Col([html.Div("Assign Tenant",className="sidebar-label"),
+                         dcc.Dropdown(id="new-tenant",
+                             options=tenant_options,
+                             value="",clearable=True,
+                             placeholder="— None —",
+                             style={"fontSize":"0.85rem"})],md=2),
                 dbc.Col([html.Div(" ",className="sidebar-label"),
                          dbc.Button("Add User",id="btn-add-user",color="success",
                                     style={"width":"100%","fontWeight":600})],md=2),
@@ -1006,16 +1094,30 @@ def user_row_action(n_toggle, n_deact, n_react, selected, data):
     State("new-display",   "value"),
     State("new-password",  "value"),
     State("new-role",      "value"),
+    State("new-tenant",    "value"),
     prevent_initial_call=True,
 )
-def add_new_user(_, username, display, password, role):
+def add_new_user(_, username, display, password, role, tenant_val):
     if not username or not password:
         return dbc.Alert("Username and Password are required.", color="warning", duration=4000), no_update
-    err = create_user(username.strip(), password, role or "viewer", display or "")
+    # Parse tenant value: "id|name" format
+    tenant_id, tenant_name = None, None
+    if tenant_val:
+        parts = tenant_val.split("|", 1)
+        if len(parts) == 2:
+            try: tenant_id = int(parts[0])
+            except ValueError: pass
+            tenant_name = parts[1]
+    err = create_user(username.strip(), password, role or "viewer", display or "",
+                      tenant_id=tenant_id, tenant_name=tenant_name)
     if err:
         return dbc.Alert("Error: {}".format(err), color="danger", duration=5000), no_update
     fresh = list_users().to_dict("records")
-    return dbc.Alert("User '{}' created as {}.".format(username.strip(), role), color="success", duration=4000), fresh
+    tenant_label = f" → Tenant: {tenant_name}" if tenant_name else ""
+    return dbc.Alert(
+        "User '{}' created as {}{}.".format(username.strip(), role, tenant_label),
+        color="success", duration=4000
+    ), fresh
 
 # ══════════════════════════════════════════════════════════════
 # DOWNLOAD CALLBACKS
@@ -1292,14 +1394,14 @@ def deactivate_tenant(n, store):
             "Plan":    t.get("plan", "").capitalize(),
             "Status":  "Active" if t.get("is_active") else "Inactive",
             "Contact": t.get("contact_email", ""),
-            "Created": (t.get("created_at", "") or "")[:10],
+                  "Created": (t.get("created_at", "") or "")[:10],
         }
         for t in (tenants if isinstance(tenants, list) else [])
     ]
     return msg, rows
 
 
-# ── Save module toggles ───────────────────────────────────────
+# -- Save module toggles -------------------------------------------------------
 @app.callback(
     Output("module-save-result", "children"),
     Input("btn-save-modules",    "n_clicks"),
@@ -1325,9 +1427,9 @@ def save_modules(n, store, values, ids):
     return dbc.Alert(f"Error: {detail}", color="danger", dismissable=True)
 
 
-# ── Load schema mapping rows when entity changes ───────────────
+# -- Load schema mapping rows --------------------------------------------------
 @app.callback(
-    Output("mapping-rows-container", "children"),
+    Output("mapping-rows", "children"),
     Input("mapping-entity-select",   "value"),
     State("selected-tenant-store",   "data"),
     prevent_initial_call=True,
@@ -1336,14 +1438,12 @@ def load_mapping_rows(entity, store):
     if not store:
         return html.P("Select a tenant first.", style={"color": "#6c757d", "fontSize": "0.8rem"})
 
-    domain  = store.get("domain", "pharmacy")
-    tid     = store.get("tenant_id")
+    domain = store.get("domain", "pharmacy")
+    tid    = store.get("tenant_id")
 
-    # Fetch canonical schema
     _, schema_data = call_api("GET", f"/domains/{domain}/{entity}")
     fields = schema_data.get("fields", []) if isinstance(schema_data, dict) else []
 
-    # Fetch existing mappings
     _, mappings_data = call_api("GET", f"/tenants/{tid}/mappings", params={"entity": entity})
     existing = {m["canonical_column"]: m["source_column"]
                 for m in (mappings_data if isinstance(mappings_data, list) else [])}
@@ -1353,7 +1453,6 @@ def load_mapping_rows(entity, store):
                       style={"color": "#6c757d", "fontSize": "0.8rem"})
 
     rows = []
-    # Header
     rows.append(dbc.Row([
         dbc.Col(html.Strong("Canonical Column", style={"fontSize": "0.72rem", "color": "#495057"}), width=5),
         dbc.Col(html.Strong("Your Source Column", style={"fontSize": "0.72rem", "color": "#495057"}), width=5),
@@ -1361,8 +1460,8 @@ def load_mapping_rows(entity, store):
     ], className="mb-1"))
 
     for f in fields:
-        cname    = f["canonical_name"]
-        src_val  = existing.get(cname, cname)  # default: same name
+        cname   = f["canonical_name"]
+        src_val = existing.get(cname, cname)
         required = "✱" if f["is_required"] else ""
         rows.append(dbc.Row([
             dbc.Col(html.Span(f["display_name"],
@@ -1380,7 +1479,7 @@ def load_mapping_rows(entity, store):
     return html.Div(rows)
 
 
-# ── Save schema mappings ──────────────────────────────────────
+# -- Save schema mappings ------------------------------------------------------
 @app.callback(
     Output("mapping-save-result",  "children"),
     Input("btn-save-mappings",     "n_clicks"),

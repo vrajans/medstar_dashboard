@@ -1,10 +1,10 @@
 """
-auth.py  —  InsightHub / MedStar Analytics
+auth.py  -  InsightHub / MedStar Analytics
 Flask-Login integration: User model, DB helpers, default user seeding.
 
 Roles:
-  admin   — all tabs + Upload + User Management + all exports
-  viewer  — Overview, Sales, Purchases, Compare + exports (no Upload / User Mgmt)
+  admin   -- all tabs + Upload + User Management + all exports
+  viewer  -- Overview, Sales, Purchases, Compare + exports (no Upload / User Mgmt)
 """
 
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -14,25 +14,35 @@ from sqlalchemy import create_engine, text
 login_manager = LoginManager()
 login_manager.session_protection = "strong"
 
-# ── User model ────────────────────────────────────────────────
+# -- User model ---------------------------------------------------------------
 class User(UserMixin):
-    def __init__(self, user_id, username, role, display_name=""):
+    def __init__(self, user_id, username, role, display_name="",
+                 tenant_id=None, tenant_name=None):
         self.id           = str(user_id)
         self.username     = username
         self.role         = role          # "admin" | "viewer"
         self.display_name = display_name or username.capitalize()
+        self.tenant_id    = tenant_id     # None = MedStar internal user
+        self.tenant_name  = tenant_name   # e.g. "Right Pharmacy"
 
     def is_admin(self):
         return self.role == "admin"
 
+    def is_tenant_user(self):
+        """True if this user belongs to an external tenant (not MedStar internal)."""
+        return self.tenant_id is not None
+
     def can_upload(self):
-        return self.role == "admin"
+        return self.role == "admin" and not self.is_tenant_user()
 
     def can_manage_users(self):
         return self.role == "admin"
 
+    def can_manage_tenants(self):
+        return self.role == "admin" and not self.is_tenant_user()
+
     def can_export(self):
-        return True   # both roles can download CSV/Excel/PDF
+        return True
 
     @property
     def role_label(self):
@@ -43,21 +53,15 @@ class User(UserMixin):
         return "#1e7e4b" if self.is_admin() else "#0d6efd"
 
 
-# ── Engine reference (set by init_auth) ───────────────────────
+# -- Engine reference ---------------------------------------------------------
 _auth_engine = None
-
 
 def _get_engine():
     return _auth_engine
 
 
-# ── Bootstrap ─────────────────────────────────────────────────
+# -- Bootstrap ----------------------------------------------------------------
 def init_auth(flask_app, db_path):
-    """
-    Register Flask-Login with the Dash/Flask app server.
-    Creates users table + seeds defaults on first run.
-    Returns the SQLAlchemy engine used for auth (same DB as pharmacy data).
-    """
     global _auth_engine
     _auth_engine = create_engine("sqlite:///{}".format(db_path), echo=False)
 
@@ -73,16 +77,23 @@ def init_auth(flask_app, db_path):
                 role          TEXT NOT NULL DEFAULT 'viewer',
                 display_name  TEXT,
                 active        INTEGER DEFAULT 1,
-                created_at    TEXT DEFAULT (datetime('now'))
+                created_at    TEXT DEFAULT (datetime('now')),
+                tenant_id     INTEGER,
+                tenant_name   TEXT
             )
         """))
         conn.commit()
 
+        for _col, _typedef in [("tenant_id", "INTEGER"), ("tenant_name", "TEXT")]:
+            try:
+                conn.execute(text(f"ALTER TABLE users ADD COLUMN {_col} {_typedef}"))
+                conn.commit()
+            except Exception:
+                pass
+
         count = conn.execute(text("SELECT COUNT(*) FROM users")).scalar()
         if count == 0:
             import os as _os
-            # PRODUCTION: set ADMIN_PASSWORD and VIEWER_PASSWORD in your .env
-            # Do NOT use these defaults for real users.
             admin_pwd  = _os.environ.get("ADMIN_PASSWORD",  "MedStar@Admin#2026")
             viewer_pwd = _os.environ.get("VIEWER_PASSWORD", "MedStar@View#2026")
             defaults = [
@@ -93,10 +104,7 @@ def init_auth(flask_app, db_path):
                 conn.execute(text("""
                     INSERT INTO users (username, password_hash, role, display_name)
                     VALUES (:u, :p, :r, :d)
-                """), {"u": uname,
-                       "p": generate_password_hash(pwd),
-                       "r": role,
-                       "d": dname})
+                """), {"u": uname, "p": generate_password_hash(pwd), "r": role, "d": dname})
             conn.commit()
             if _os.environ.get("ADMIN_PASSWORD"):
                 print("[Auth] Default users seeded from environment variables.")
@@ -113,52 +121,65 @@ def init_auth(flask_app, db_path):
     return _auth_engine
 
 
-# ── Query helpers ─────────────────────────────────────────────
+# -- Query helpers ------------------------------------------------------------
 def get_user_by_id(user_id):
     with _get_engine().connect() as conn:
         row = conn.execute(
-            text("SELECT id, username, role, display_name FROM users "
-                 "WHERE id=:id AND active=1"),
+            text("SELECT id, username, role, display_name, tenant_id, tenant_name "
+                 "FROM users WHERE id=:id AND active=1"),
             {"id": user_id},
         ).fetchone()
-    return User(row[0], row[1], row[2], row[3]) if row else None
+    if not row:
+        return None
+    return User(row[0], row[1], row[2], row[3],
+                tenant_id=row[4], tenant_name=row[5])
 
 
 def authenticate(username, password):
     """Return User if credentials valid, else None."""
     with _get_engine().connect() as conn:
         row = conn.execute(
-            text("SELECT id, username, password_hash, role, display_name "
+            text("SELECT id, username, password_hash, role, display_name, "
+                 "tenant_id, tenant_name "
                  "FROM users WHERE username=:u AND active=1"),
             {"u": username},
         ).fetchone()
     if row and check_password_hash(row[2], password):
-        return User(row[0], row[1], row[3], row[4])
+        return User(row[0], row[1], row[3], row[4],
+                    tenant_id=row[5], tenant_name=row[6])
     return None
 
 
-# ── CRUD ──────────────────────────────────────────────────────
+# -- CRUD ---------------------------------------------------------------------
 def list_users():
     import pandas as pd
     with _get_engine().connect() as conn:
-        return pd.read_sql_query(
-            "SELECT id, username, display_name, role, active, created_at "
-            "FROM users ORDER BY id",
+        df = pd.read_sql_query(
+            "SELECT id, username, display_name, role, active, created_at, "
+            "tenant_id, tenant_name FROM users ORDER BY id",
             conn,
         )
+    df["created_at"]  = df["created_at"].astype(str).str[:10]
+    df["active"]      = df["active"].apply(lambda x: "Yes" if x else "No")
+    df["tenant_name"] = df["tenant_name"].fillna("-")
+    return df
 
 
-def create_user(username, password, role, display_name=""):
+def create_user(username, password, role, display_name="", tenant_id=None, tenant_name=None):
     """Returns None on success, error string on failure."""
     try:
         with _get_engine().connect() as conn:
             conn.execute(text("""
-                INSERT INTO users (username, password_hash, role, display_name)
-                VALUES (:u, :p, :r, :d)
-            """), {"u": username,
-                   "p": generate_password_hash(password),
-                   "r": role,
-                   "d": display_name or username.capitalize()})
+                INSERT INTO users (username, password_hash, role, display_name, tenant_id, tenant_name)
+                VALUES (:u, :p, :r, :d, :tid, :tname)
+            """), {
+                "u":     username,
+                "p":     generate_password_hash(password),
+                "r":     role,
+                "d":     display_name or username.capitalize(),
+                "tid":   tenant_id,
+                "tname": tenant_name,
+            })
             conn.commit()
         return None
     except Exception as e:
