@@ -36,3 +36,42 @@ python-dotenv>=1.0.0
 # ── Production server ──────────────────────────────────────────────────────
 gunicorn>=21.2.0
 requests>=2.31.0
+
+# ══════════════════════════════════════════════════════════════
+# Phase 1 & 2 dependencies
+# ══════════════════════════════════════════════════════════════
+
+# ── Alert channels ─────────────────────────────────────────────
+# Email (SendGrid uses stdlib urllib — no extra package needed)
+# WhatsApp (Interakt / WATI — uses stdlib urllib — no extra package)
+twilio>=8.0.0            # SMS alerts (USA / Global)
+slack-sdk>=3.27.0        # Slack webhook alerts (Phase 2)
+
+# ── Scheduling ─────────────────────────────────────────────────
+APScheduler>=3.10.0      # Background job scheduler
+
+# ── File watching (Marg ERP) ───────────────────────────────────
+watchdog>=4.0.0          # Marg file-drop folder watcher
+
+# ── MFA ────────────────────────────────────────────────────────
+pyotp>=2.9.0             # TOTP / HOTP (Google Authenticator)
+qrcode[pil]>=7.4.2       # QR code generation for MFA setup
+
+# ── Billing ────────────────────────────────────────────────────
+razorpay>=1.4.0          # Razorpay India billing (INR)
+stripe>=9.0.0            # Stripe USA/Global billing (USD)
+
+# ── QuickBooks OAuth ───────────────────────────────────────────
+intuit-oauth>=1.2.6      # Intuit OAuth 2.0 (QuickBooks)
+
+# ── AI / RAG ───────────────────────────────────────────────────
+chromadb>=0.5.0          # Vector store for RAG pipeline
+# groq — uses stdlib urllib (no package needed for REST calls)
+# nomic-embed-text — served via Ollama locally, no Python package
+# openai>=1.0.0         # Uncomment if using OpenAI embeddings
+
+# ── i18n ───────────────────────────────────────────────────────
+# Translation JSON files handled natively — no extra package needed
+
+# ── Export (Phase 2) ───────────────────────────────────────────
+# zipfile — stdlib, no package needed

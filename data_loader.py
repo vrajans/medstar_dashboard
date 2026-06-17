@@ -238,25 +238,45 @@ def init_db(sales_df, purchase_df):
     with engine.connect() as conn:
         conn.execute(text("""
             CREATE TABLE IF NOT EXISTS upload_history (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                filename    TEXT,
-                report_type TEXT,
-                branch      TEXT,
-                month_label TEXT,
-                row_count   INTEGER,
-                uploaded_at TEXT,
-                duplicate_warning INTEGER DEFAULT 0
+                id                INTEGER PRIMARY KEY AUTOINCREMENT,
+                filename          TEXT,
+                report_type       TEXT,
+                branch            TEXT,
+                month_label       TEXT,
+                row_count         INTEGER,
+                uploaded_at       TEXT,
+                duplicate_warning INTEGER DEFAULT 0,
+                status            TEXT    DEFAULT 'active',
+                source            TEXT    DEFAULT 'manual',
+                tenant_id         INTEGER DEFAULT NULL
             )
         """))
+        # Migrate existing tables to add new columns if missing (SQLite ALTER TABLE)
+        for col, definition in [
+            ("status",    "TEXT DEFAULT 'active'"),
+            ("source",    "TEXT DEFAULT 'manual'"),
+            ("tenant_id", "INTEGER DEFAULT NULL"),
+        ]:
+            try:
+                conn.execute(text(f"ALTER TABLE upload_history ADD COLUMN {col} {definition}"))
+            except Exception:
+                pass  # Column already exists
+        # Ensure sales + purchases tables have upload_id for rollback tracking
+        for tbl in ("sales", "purchases"):
+            try:
+                conn.execute(text(f"ALTER TABLE {tbl} ADD COLUMN upload_id INTEGER DEFAULT NULL"))
+            except Exception:
+                pass  # Column already exists or table not yet created
         conn.commit()
 
     print(f"[DB] Saved to {DB_PATH}")
     return engine
 
 
-def append_upload_to_db(store_data, engine):
+def append_upload_to_db(store_data, engine, tenant_id=None, source="manual"):
     """
-    Save a confirmed upload (from dcc.Store dict) into SQLite.
+    Save a confirmed upload (from dcc.Store dict) into SQLite/PostgreSQL.
+    Tracks upload_id in data rows for rollback support.
     Returns (row_count, duplicate_warning_bool, error_str).
     """
     try:
@@ -281,18 +301,39 @@ def append_upload_to_db(store_data, engine):
             if col in df.columns:
                 df[col] = pd.to_datetime(df[col], errors="coerce")
 
-        df.to_sql(table, con=engine, if_exists="append", index=False)
+        # Write history row FIRST so we can get its auto-generated id
+        with engine.connect() as conn:
+            conn.execute(text("""
+                INSERT INTO upload_history
+                    (filename, report_type, branch, month_label, row_count,
+                     uploaded_at, duplicate_warning, status, source, tenant_id)
+                VALUES
+                    (:fn, :rt, :br, :ml, :rc, :ua, :dw, 'active', :src, :tid)
+            """), {
+                "fn":  filename,
+                "rt":  report_type,
+                "br":  branch,
+                "ml":  month_label,
+                "rc":  len(df),
+                "ua":  datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "dw":  int(duplicate),
+                "src": source,
+                "tid": tenant_id,
+            })
+            conn.commit()
+            # Fetch the new upload_history id
+            row = conn.execute(
+                text("SELECT id FROM upload_history ORDER BY id DESC LIMIT 1")
+            ).fetchone()
+            upload_id = row[0] if row else None
 
-        history_row = pd.DataFrame([{
-            "filename":          filename,
-            "report_type":       report_type,
-            "branch":            branch,
-            "month_label":       month_label,
-            "row_count":         len(df),
-            "uploaded_at":       datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "duplicate_warning": int(duplicate),
-        }])
-        history_row.to_sql("upload_history", con=engine, if_exists="append", index=False)
+        # Tag each data row with upload_id + tenant_id for rollback
+        if upload_id:
+            df["upload_id"] = upload_id
+        if tenant_id:
+            df["tenant_id"] = tenant_id
+
+        df.to_sql(table, con=engine, if_exists="append", index=False)
 
         return len(df), duplicate, None
 
@@ -317,14 +358,21 @@ def load_from_db(engine):
     return s, p
 
 
-def get_upload_history(engine):
-    """Return upload_history table as a DataFrame."""
+def get_upload_history(engine, tenant_id=None):
+    """Return upload_history table as a DataFrame, optionally filtered by tenant."""
     try:
-        return pd.read_sql_query(
-            "SELECT filename, report_type, branch, month_label, row_count, "
-            "uploaded_at, duplicate_warning FROM upload_history ORDER BY id DESC",
-            engine
+        base_sql = (
+            "SELECT id, filename, report_type, branch, month_label, row_count, "
+            "uploaded_at, duplicate_warning, "
+            "COALESCE(status, 'active') AS status, "
+            "COALESCE(source, 'manual') AS source, "
+            "tenant_id "
+            "FROM upload_history"
         )
+        if tenant_id is not None:
+            base_sql += " WHERE tenant_id = :tid ORDER BY id DESC"
+            return pd.read_sql_query(text(base_sql), engine, params={"tid": tenant_id})
+        return pd.read_sql_query(base_sql + " ORDER BY id DESC", engine)
     except Exception:
         return pd.DataFrame()
 
@@ -332,34 +380,61 @@ def get_upload_history(engine):
 # ── Startup loader ─────────────────────────────────────────────
 def load_all_data():
     all_sales, all_purchase = [], []
-    for filename, rtype, branch, month in FILE_REGISTRY:
-        filepath = os.path.join(DATA_DIR, filename)
-        if not os.path.exists(filepath):
-            print(f"[WARN] Not found, skipping: {filepath}")
-            continue
-        try:
-            if rtype == "sales":
-                df = _parse_sales(filepath, branch, month)
-                all_sales.append(df)
-                print(f"[OK] Sales   | {branch} {month} | {len(df)} rows")
-            else:
-                df = _parse_purchase(filepath, branch, month)
-                all_purchase.append(df)
-                print(f"[OK] Purchase| {branch} {month} | {len(df)} rows")
-        except Exception as e:
-            print(f"[ERR] {filename}: {e}")
+    engine = _get_sqlite_engine()
+    try:
+        s = pd.read_sql_query("SELECT * FROM sales", engine)
+        s["bill_date"] = pd.to_datetime(s["bill_date"], errors="coerce")
+        all_sales.append(s)
+    except Exception:
+        pass
+    try:
+        p = pd.read_sql_query("SELECT * FROM purchases", engine)
+        for col in ["grn_date", "invoice_date"]:
+            if col in p.columns:
+                p[col] = pd.to_datetime(p[col], errors="coerce")
+        all_purchase.append(p)
+    except Exception:
+        pass
+    sales_df    = pd.concat(all_sales,    ignore_index=True) if all_sales    else pd.DataFrame()
+    purchase_df = pd.concat(all_purchase, ignore_index=True) if all_purchase else pd.DataFrame()
+    return sales_df, purchase_df, engine
 
-    s = pd.concat(all_sales,    ignore_index=True) if all_sales    else pd.DataFrame()
-    p = pd.concat(all_purchase, ignore_index=True) if all_purchase else pd.DataFrame()
-    return s, p
+
+def _get_sqlite_engine():
+    """Return a SQLAlchemy engine pointing at the local SQLite DB."""
+    engine = create_engine(f"sqlite:///{DB_PATH}", echo=False)
+    return engine
 
 
 def get_data():
-    """Entry point: load registry files, persist to SQLite, return DataFrames + engine."""
-    print("\n── Loading MedStar Pharmacy Data ──")
-    sales_df, purchase_df = load_all_data()
-    engine = init_db(sales_df, purchase_df)
-    print(f"    Sales rows:    {len(sales_df)}")
-    print(f"    Purchase rows: {len(purchase_df)}")
-    print("── Data ready ──\n")
+    """
+    Public entry point used by app.py at startup.
+    Reads the FILE_REGISTRY, parses each file, seeds the DB, returns
+    (sales_df, purchase_df, engine).
+    Falls back to loading from an existing DB if files are missing.
+    """
+    all_sales, all_purchase = [], []
+
+    for filename, rtype, branch, month_label in FILE_REGISTRY:
+        filepath = os.path.join(DATA_DIR, filename)
+        if not os.path.exists(filepath):
+            continue
+        try:
+            if rtype == "sales":
+                all_sales.append(_parse_sales(filepath, branch, month_label))
+            else:
+                all_purchase.append(_parse_purchase(filepath, branch, month_label))
+        except Exception as exc:
+            print(f"[data_loader] Skipping {filename}: {exc}")
+
+    sales_df    = pd.concat(all_sales,    ignore_index=True) if all_sales    else pd.DataFrame()
+    purchase_df = pd.concat(all_purchase, ignore_index=True) if all_purchase else pd.DataFrame()
+
+    # Seed DB (or load from existing DB if no files found)
+    if not sales_df.empty or not purchase_df.empty:
+        engine = init_db(sales_df, purchase_df)
+    else:
+        engine = _get_sqlite_engine()
+        sales_df, purchase_df = load_from_db(engine)
+
     return sales_df, purchase_df, engine

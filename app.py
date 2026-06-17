@@ -29,6 +29,19 @@ from auth        import init_auth, authenticate, list_users, create_user, \
 from login_page     import render_login
 from tenant_portal  import render_tenants_tab, call_api, MODULE_LABELS, API_BASE
 
+# ── Phase 1 & 2 feature imports ───────────────────────────────
+from gst_report       import render_gst_tab
+from yoy_report       import render_yoy_tab
+from expiry_dashboard import render_expiry_tab, render_stock_tab, render_cash_credit_tab
+from ai.rag           import (render_ai_chat_tab, rag_answer,
+                               render_user_message, render_assistant_message,
+                               render_anomaly_results, get_anomaly_report)
+from billing          import init_billing_tables, register_billing_routes, BillingEngine, PLANS
+from mfa              import init_mfa_tables, register_mfa_routes, render_mfa_settings_card
+from onboarding       import render_upload_rollback_tab, do_rollback
+from referral         import (init_referral_tables, register_referral_routes,
+                               render_referral_tab, get_or_create_referral_code)
+
 # ── Load pharmacy data ────────────────────────────────────────
 sales_df, purchase_df, engine = get_data()
 
@@ -305,6 +318,27 @@ auth_engine = init_auth(app.server, DB_PATH)
 import os as _os
 app.server.secret_key = _os.environ.get("FLASK_SECRET_KEY", "insighthub-secret-change-in-prod-2026")
 
+# ── Phase 1 & 2: init DB tables ──────────────────────────────
+try:
+    init_billing_tables(auth_engine)
+    init_mfa_tables(auth_engine)
+    init_referral_tables(auth_engine)
+    from scheduler import start_scheduler
+    start_scheduler(auth_engine)
+except Exception as _init_err:
+    print(f"[app] Phase 1/2 init warning: {_init_err}")
+
+# ── Register new Flask routes ─────────────────────────────────
+try:
+    register_billing_routes(app.server, auth_engine)
+    register_mfa_routes(app.server, auth_engine)
+    register_referral_routes(app.server, auth_engine)
+    from integrations.quickbooks import register_qb_routes, init_qb_tables
+    init_qb_tables(auth_engine)
+    register_qb_routes(app.server, auth_engine)
+except Exception as _route_err:
+    print(f"[app] Route registration warning: {_route_err}")
+
 # ── Flask auth routes ─────────────────────────────────────────
 
 def _warm_up_api():
@@ -386,6 +420,8 @@ app.layout = html.Div([
     dcc.Store(id="data-version",      data=0),
     dcc.Store(id="upload-raw-store",  data=None),
     dcc.Store(id="upload-prev-store", data=None),
+    dcc.Store(id="ai-chat-history",   data=[]),
+    dcc.Store(id="ai-kpi-context",    data={}),
     dcc.Download(id="dl-sales-csv"),
     dcc.Download(id="dl-sales-xlsx"),
     dcc.Download(id="dl-purch-csv"),
@@ -398,6 +434,7 @@ app.layout = html.Div([
             dcc.Tabs(id="main-tabs", value="overview",
                      className="custom-tabs-container",
                      children=[
+                # ── Core tabs (always visible) ────────────────────────────
                 dcc.Tab(label="Overview",       value="overview",
                         className="custom-tab", selected_className="custom-tab--selected"),
                 dcc.Tab(label="Sales",          value="sales",
@@ -406,8 +443,36 @@ app.layout = html.Div([
                         className="custom-tab", selected_className="custom-tab--selected"),
                 dcc.Tab(label="Branch Compare", value="compare",
                         className="custom-tab", selected_className="custom-tab--selected"),
+                # ── Phase 1 new tabs ──────────────────────────────────────
+                dcc.Tab(label="YoY Analysis",   value="yoy",
+                        id="tab-yoy",
+                        className="custom-tab", selected_className="custom-tab--selected"),
+                dcc.Tab(label="GST / Tax",      value="gst",
+                        id="tab-gst",
+                        className="custom-tab", selected_className="custom-tab--selected"),
+                dcc.Tab(label="Expiry",         value="expiry",
+                        id="tab-expiry",
+                        className="custom-tab", selected_className="custom-tab--selected"),
+                dcc.Tab(label="Stock",          value="stock",
+                        id="tab-stock",
+                        className="custom-tab", selected_className="custom-tab--selected"),
+                dcc.Tab(label="Cash/Credit",    value="cashcredit",
+                        id="tab-cashcredit",
+                        className="custom-tab", selected_className="custom-tab--selected"),
+                # ── Phase 2 new tabs ──────────────────────────────────────
+                dcc.Tab(label="AI Chat 🤖",    value="aichat",
+                        id="tab-aichat",
+                        className="custom-tab", selected_className="custom-tab--selected"),
+                dcc.Tab(label="Referrals 🤝",  value="referral",
+                        id="tab-referral",
+                        className="custom-tab", selected_className="custom-tab--selected"),
+                # ── Admin-only tabs (hidden by RBAC) ──────────────────────
                 dcc.Tab(label="Upload Data",    value="upload",
                         id="tab-upload",
+                        className="custom-tab", selected_className="custom-tab--selected",
+                        style={"display":"none"}),
+                dcc.Tab(label="Upload History", value="rollback",
+                        id="tab-rollback",
                         className="custom-tab", selected_className="custom-tab--selected",
                         style={"display":"none"}),
                 dcc.Tab(label="Users",          value="users",
@@ -416,6 +481,10 @@ app.layout = html.Div([
                         style={"display":"none"}),
                 dcc.Tab(label="Tenants",        value="tenants",
                         id="tab-tenants",
+                        className="custom-tab", selected_className="custom-tab--selected",
+                        style={"display":"none"}),
+                dcc.Tab(label="Billing",        value="billing",
+                        id="tab-billing",
                         className="custom-tab", selected_className="custom-tab--selected",
                         style={"display":"none"}),
             ]),
@@ -431,8 +500,10 @@ _TAB_HIDE = {"display":"none"}  # hidden
 @app.callback(
     Output("navbar-user-info", "children"),
     Output("tab-upload",       "style"),
+    Output("tab-rollback",     "style"),
     Output("tab-users",        "style"),
     Output("tab-tenants",      "style"),
+    Output("tab-billing",      "style"),
     Input("data-version",      "data"),
 )
 def update_navbar_user(_v):
@@ -441,6 +512,8 @@ def update_navbar_user(_v):
         authed      = u.is_authenticated
         is_admin    = authed and u.is_admin()
         is_tenant   = authed and u.is_tenant_user()
+        # CA / Accountant role (read-only) — can see analytics but not upload/users/billing
+        is_ca       = authed and getattr(u, "role", "") == "ca"
         display     = u.display_name if authed else "Guest"
         role        = u.role_label   if authed else ""
         role_col    = u.role_color   if authed else C_BLUE
@@ -448,10 +521,24 @@ def update_navbar_user(_v):
     except Exception:
         is_admin  = False
         is_tenant = False
+        is_ca     = False
         display   = "Guest"
         role      = ""
         role_col  = C_BLUE
         tenant_name = None
+
+    # MFA indicator
+    mfa_icon = []
+    try:
+        from sqlalchemy import text
+        with auth_engine.connect() as conn:
+            row = conn.execute(text("SELECT mfa_enabled FROM users WHERE id = :uid"),
+                               {"uid": current_user.id}).fetchone()
+        if row and row[0]:
+            mfa_icon = [html.Span("🔒", title="MFA enabled",
+                                  style={"fontSize":"0.75rem","opacity":"0.8"})]
+    except Exception:
+        pass
 
     # Subtitle for tenant users
     subtitle = []
@@ -463,6 +550,7 @@ def update_navbar_user(_v):
     user_info = html.Div([
         html.Span(display, style={"fontSize":"0.8rem","fontWeight":600,"color":"white"}),
         *subtitle,
+        *mfa_icon,
         html.Span(role,
                   style={"fontSize":"0.65rem","fontWeight":700,"padding":"2px 7px",
                          "borderRadius":"20px","background":"rgba(255,255,255,0.2)",
@@ -473,15 +561,24 @@ def update_navbar_user(_v):
                       "paddingLeft":"10px","marginLeft":"2px"}),
     ], style={"display":"flex","alignItems":"center","gap":"8px"})
 
-    # Tab visibility rules:
-    # Upload Data → MedStar internal admin only
-    # Users       → any admin (including tenant admin)
-    # Tenants     → MedStar internal admin only
-    upload_style  = _TAB_SHOW if (is_admin and not is_tenant) else _TAB_HIDE
-    users_style   = _TAB_SHOW if is_admin else _TAB_HIDE
-    tenants_style = _TAB_SHOW if (is_admin and not is_tenant) else _TAB_HIDE
+    # ── RBAC tab visibility ──────────────────────────────────────────────────
+    # Upload Data  → internal admin only (not tenant, not CA)
+    # Upload History (Rollback) → same as upload
+    # Users        → any admin (including tenant admin)
+    # Tenants      → internal admin only
+    # Billing      → internal admin only
+    # Phase 1 tabs (YoY, GST, Expiry, Stock, Cash/Credit) → everyone inc CA
+    # AI Chat      → everyone (falls back gracefully if GROQ_API_KEY not set)
 
-    return user_info, upload_style, users_style, tenants_style
+    internal_admin = is_admin and not is_tenant and not is_ca
+    upload_style   = _TAB_SHOW if internal_admin else _TAB_HIDE
+    rollback_style = _TAB_SHOW if internal_admin else _TAB_HIDE
+    users_style    = _TAB_SHOW if is_admin else _TAB_HIDE
+    tenants_style  = _TAB_SHOW if internal_admin else _TAB_HIDE
+    billing_style  = _TAB_SHOW if internal_admin else _TAB_HIDE
+
+    return (user_info, upload_style, rollback_style,
+            users_style, tenants_style, billing_style)
 
 # ── Quick-select ──────────────────────────────────────────────
 @app.callback(
@@ -608,14 +705,92 @@ def render_tab(tab, branch, start_date, end_date, _version):
     except Exception:
         plabel = ""
 
-    if   tab == "overview":   content = render_overview(branch, start_date, end_date)
-    elif tab == "sales":      content = render_sales(branch, start_date, end_date)
-    elif tab == "purchases":  content = render_purchases(branch, start_date, end_date)
-    elif tab == "compare":    content = render_compare(start_date, end_date)
-    elif tab == "upload":     content = render_upload_tab()
-    elif tab == "users":      content = render_users_tab()
-    elif tab == "tenants":    content = render_tenants_tab()
-    else:                     content = html.Div()
+    # ── Determine tenant_id for per-tenant views ─────────────────
+    try:
+        _tid = (current_user.tenant_id
+                if current_user.is_authenticated and current_user.is_tenant_user()
+                else None)
+    except Exception:
+        _tid = None
+
+    # ── Tab routing ───────────────────────────────────────────────
+    if   tab == "overview":
+        content = render_overview(branch, start_date, end_date)
+    elif tab == "sales":
+        content = render_sales(branch, start_date, end_date)
+    elif tab == "purchases":
+        content = render_purchases(branch, start_date, end_date)
+    elif tab == "compare":
+        content = render_compare(start_date, end_date)
+
+    # ── Phase 1 new tabs ──────────────────────────────────────────
+    elif tab == "yoy":
+        try:
+            content = render_yoy_tab(sales_df, purchase_df, branch)
+        except Exception as _e:
+            content = html.Div(f"YoY tab error: {_e}", style={"color":"red","padding":"1rem"})
+
+    elif tab == "gst":
+        try:
+            content = render_gst_tab(purchase_df, branch, start_date, end_date)
+        except Exception as _e:
+            content = html.Div(f"GST tab error: {_e}", style={"color":"red","padding":"1rem"})
+
+    elif tab == "expiry":
+        try:
+            content = render_expiry_tab(auth_engine, _tid)
+        except Exception as _e:
+            content = html.Div(f"Expiry tab error: {_e}", style={"color":"red","padding":"1rem"})
+
+    elif tab == "stock":
+        try:
+            content = render_stock_tab(auth_engine, _tid)
+        except Exception as _e:
+            content = html.Div(f"Stock tab error: {_e}", style={"color":"red","padding":"1rem"})
+
+    elif tab == "cashcredit":
+        try:
+            content = render_cash_credit_tab(sales_df, branch, start_date, end_date)
+        except Exception as _e:
+            content = html.Div(f"Cash/Credit tab error: {_e}", style={"color":"red","padding":"1rem"})
+
+    # ── Phase 2 new tabs ──────────────────────────────────────────
+    elif tab == "aichat":
+        try:
+            tname = (current_user.tenant_name if
+                     current_user.is_authenticated and current_user.is_tenant_user()
+                     else "InsightHub")
+            content = render_ai_chat_tab(tenant_name=tname)
+        except Exception as _e:
+            content = html.Div(f"AI Chat tab error: {_e}", style={"color":"red","padding":"1rem"})
+
+    elif tab == "referral":
+        try:
+            _ref_tid  = int(_tid) if _tid else 1
+            _ref_tname = (current_user.tenant_name if
+                          current_user.is_authenticated and current_user.is_tenant_user()
+                          else "InsightHub")
+            _currency  = "INR"  # TODO: derive from tenant profile
+            content = render_referral_tab(_ref_tid, _ref_tname, auth_engine, _currency)
+        except Exception as _e:
+            content = html.Div(f"Referral tab error: {_e}", style={"color":"red","padding":"1rem"})
+
+    # ── Admin tabs ────────────────────────────────────────────────
+    elif tab == "upload":
+        content = render_upload_tab()
+    elif tab == "rollback":
+        try:
+            content = render_upload_rollback_tab(auth_engine, _tid)
+        except Exception as _e:
+            content = html.Div(f"Rollback tab error: {_e}", style={"color":"red","padding":"1rem"})
+    elif tab == "users":
+        content = render_users_tab()
+    elif tab == "tenants":
+        content = render_tenants_tab()
+    elif tab == "billing":
+        content = _render_billing_tab()
+    else:
+        content = html.Div()
 
     return content, b_opts, sources, status, plabel
 
@@ -755,7 +930,7 @@ def render_sales(branch, start_date, end_date):
         labels={"_month":"Month","amount":"Sales (Rs.)","cat":"Category"},title="Pharma vs Non-Pharma")
     fig_ph.update_layout(**CHART_LAYOUT)
 
-    ret = s[s["cash_return"] > 0].sort_values("bill_date") if "cash_return" in s.columns else pd.DataFrame()
+    ret = s[s.get("cash_return",pd.Series([0])>0)].sort_values("bill_date") if "cash_return" in s.columns else pd.DataFrame()
     fig_ret = (px.bar(ret,x="bill_date",y="cash_return",color="branch",color_discrete_map=BCM,
         labels={"bill_date":"Date","cash_return":"Return (Rs.)"},title="Daily Returns")
         if not ret.empty else go.Figure())
@@ -1517,6 +1692,207 @@ def save_mappings(n, store, entity, values, ids):
         )
     detail = data.get("detail", "Error") if isinstance(data, dict) else str(data)
     return dbc.Alert(f"Error: {detail}", color="danger", dismissable=True)
+
+
+# ══════════════════════════════════════════════════════════════
+# BILLING TAB
+# ══════════════════════════════════════════════════════════════
+def _render_billing_tab() -> html.Div:
+    """Render the billing / plan management tab for super-admins."""
+    try:
+        currency = "INR"
+        plans    = BillingEngine(currency).get_plan_display()
+    except Exception:
+        plans = []
+
+    plan_cards = []
+    for plan in plans:
+        plan_cards.append(
+            html.Div([
+                html.Div(plan["name"],
+                         style={"fontWeight":700,"fontSize":"0.95rem","color":"#1a1a2e",
+                                "marginBottom":"0.4rem"}),
+                html.Div(plan["monthly"],
+                         style={"fontSize":"1.2rem","fontWeight":700,"color":C_BLUE,
+                                "marginBottom":"0.4rem"}),
+                html.Ul([html.Li(f, style={"fontSize":"0.74rem","color":"#6b7280"})
+                         for f in plan["features"]],
+                        style={"paddingLeft":"1rem","margin":"0 0 0.75rem"}),
+                dbc.Button(
+                    "Upgrade" if plan["plan_id"] != "starter" else "Current",
+                    href=f"/billing/checkout?plan={plan['plan_id']}&currency={currency}",
+                    color="success" if plan["plan_id"] == "growth" else "outline-success",
+                    size="sm", style={"width":"100%","fontWeight":600,"fontSize":"0.8rem"},
+                ),
+            ], style={"background":"#fff","border":"1.5px solid #e2e8f0","borderRadius":"12px",
+                      "padding":"1.2rem","boxShadow":"0 1px 4px rgba(0,0,0,0.05)"})
+        )
+
+    return html.Div([
+        html.Div([
+            html.H4("Billing & Plans", style={"margin":0,"fontWeight":700,"color":C_GREEN}),
+            html.Span("Manage your InsightHub subscription",
+                      style={"fontSize":"0.78rem","color":"#6b7280"}),
+        ], style={"marginBottom":"1.2rem"}),
+        html.Div(plan_cards, style={"display":"grid",
+                                    "gridTemplateColumns":"repeat(auto-fill,minmax(220px,1fr))",
+                                    "gap":"0.75rem","marginBottom":"1.5rem"}),
+        html.Div([
+            html.Span("💡 ", style={"fontSize":"1rem"}),
+            html.Span("Need a custom plan for your chain or franchise? ",
+                      style={"fontSize":"0.82rem","color":"#374151"}),
+            html.A("Contact us", href="mailto:sales@insighthub.ai",
+                   style={"fontSize":"0.82rem","color":C_BLUE,"fontWeight":600}),
+        ], style={"background":"#f0f9ff","borderRadius":"8px","padding":"0.75rem 1rem",
+                  "border":"1px solid #bfdbfe"}),
+    ])
+
+
+# ══════════════════════════════════════════════════════════════
+# AI CHAT CALLBACKS
+# ══════════════════════════════════════════════════════════════
+@app.callback(
+    Output("ai-chat-messages", "children"),
+    Output("ai-chat-history",  "data"),
+    Output("ai-chat-input",    "value"),
+    Input("ai-chat-send",      "n_clicks"),
+    Input({"type":"ai-suggest-btn","idx":dash.ALL}, "n_clicks"),
+    State("ai-chat-input",    "value"),
+    State("ai-chat-history",  "data"),
+    State("ai-language-select","value"),
+    State("ai-kpi-context",   "data"),
+    prevent_initial_call=True,
+)
+def handle_ai_chat(n_send, suggest_clicks, user_input, history, language, kpi_ctx):
+    triggered = ctx.triggered_id
+    text      = user_input or ""
+
+    if isinstance(triggered, dict) and triggered.get("type") == "ai-suggest-btn":
+        suggested = [
+            "How did we perform last month?",
+            "Which branch had the highest margin?",
+            "Are there any anomalies in our sales data?",
+            "What are our top suppliers by purchase value?",
+            "What's our average cash vs credit ratio?",
+            "Compare this year vs last year sales",
+        ]
+        idx  = triggered.get("idx", 0)
+        text = suggested[idx] if idx < len(suggested) else text
+
+    if not text.strip():
+        raise dash.exceptions.PreventUpdate
+
+    try:
+        tid = current_user.id if current_user.is_authenticated else None
+    except Exception:
+        tid = None
+
+    # Reconstruct existing chat UI
+    existing_messages = []
+    for turn in (history or []):
+        if turn["role"] == "user":
+            existing_messages.append(render_user_message(turn["content"]))
+        else:
+            existing_messages.append(render_assistant_message(turn["content"]))
+    existing_messages.append(render_user_message(text))
+
+    kpi_data = kpi_ctx or {}
+    try:
+        answer, new_history = rag_answer(
+            question=text,
+            tenant_id=tid or 0,
+            kpi_data=kpi_data,
+            history=history or [],
+            language=language or "English",
+        )
+    except Exception as exc:
+        answer      = f"Sorry, I encountered an error: {exc}"
+        new_history = (history or []) + [
+            {"role":"user","content":text},
+            {"role":"assistant","content":answer},
+        ]
+
+    existing_messages.append(render_assistant_message(answer))
+    return existing_messages, new_history, ""
+
+
+@app.callback(
+    Output("ai-chat-messages", "children", allow_duplicate=True),
+    Output("ai-chat-history",  "data",     allow_duplicate=True),
+    Input("ai-chat-clear",     "n_clicks"),
+    prevent_initial_call=True,
+)
+def clear_ai_chat(_n):
+    from ai.rag import _system_message
+    try:
+        tname = (current_user.tenant_name if
+                 current_user.is_authenticated and current_user.is_tenant_user()
+                 else "InsightHub")
+    except Exception:
+        tname = "InsightHub"
+    return [_system_message(
+        f"Hello! I'm your InsightHub AI assistant for {tname}. "
+        "Ask me anything about your sales, purchases, margins, or inventory."
+    )], []
+
+
+@app.callback(
+    Output("ai-anomaly-results", "children"),
+    Input("ai-anomaly-btn",      "n_clicks"),
+    prevent_initial_call=True,
+)
+def run_anomaly_detection(_n):
+    try:
+        tname = (current_user.tenant_name if
+                 current_user.is_authenticated and current_user.is_tenant_user()
+                 else "InsightHub")
+        anomalies = get_anomaly_report(sales_df, tenant_id=0, tenant_name=tname)
+        return render_anomaly_results(anomalies)
+    except Exception as exc:
+        return dbc.Alert(f"Anomaly detection error: {exc}", color="danger",
+                         style={"fontSize":"0.82rem","marginTop":"0.5rem"})
+
+
+# ══════════════════════════════════════════════════════════════
+# UPLOAD ROLLBACK CALLBACK
+# ══════════════════════════════════════════════════════════════
+@app.callback(
+    Output("rollback-feedback",  "children"),
+    Input({"type":"rollback-btn","uid":dash.ALL}, "n_clicks"),
+    prevent_initial_call=True,
+)
+def handle_rollback(n_clicks_list):
+    triggered = ctx.triggered_id
+    if not triggered or not any(n for n in n_clicks_list if n):
+        raise dash.exceptions.PreventUpdate
+    uid = triggered.get("uid")
+    if not uid:
+        raise dash.exceptions.PreventUpdate
+    ok, msg = do_rollback(int(uid), auth_engine)
+    color   = "success" if ok else "danger"
+    return dbc.Alert(msg, color=color, dismissable=True,
+                     style={"fontSize":"0.82rem","marginBottom":"0.75rem"})
+
+
+# ══════════════════════════════════════════════════════════════
+# YoY YEAR SELECTOR CALLBACK
+# ══════════════════════════════════════════════════════════════
+@app.callback(
+    Output("tab-content", "children", allow_duplicate=True),
+    Input("yoy-year-select", "value"),
+    State("filter-branch",   "value"),
+    prevent_initial_call=True,
+)
+def yoy_year_change(year, branch):
+    return render_yoy_tab(sales_df, purchase_df, branch=branch or "All", curr_year=year)
+
+
+# Expose Flask server for gunicorn (Render.com / production)
+server = app.server
+
+# -- Run -----------------------------------------------------------------------
+if __name__ == "__main__":
+    app.run(debug=True, host="127.0.0.1", port=8050)
 
 
 # Expose Flask server for gunicorn (Render.com / production)

@@ -5,6 +5,7 @@ Flask-Login integration: User model, DB helpers, default user seeding.
 Roles:
   admin   -- all tabs + Upload + User Management + all exports
   viewer  -- Overview, Sales, Purchases, Compare + exports (no Upload / User Mgmt)
+  ca      -- accountant read-only: analytics + GST/YoY but no Upload/Users/Billing
 """
 
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -20,16 +21,23 @@ class User(UserMixin):
                  tenant_id=None, tenant_name=None):
         self.id           = str(user_id)
         self.username     = username
-        self.role         = role          # "admin" | "viewer"
+        self.role         = role          # "admin" | "viewer" | "ca"
         self.display_name = display_name or username.capitalize()
-        self.tenant_id    = tenant_id     # None = MedStar internal user
+        self.tenant_id    = tenant_id     # None = InsightHub internal user
         self.tenant_name  = tenant_name   # e.g. "Right Pharmacy"
 
     def is_admin(self):
         return self.role == "admin"
 
+    def is_ca(self):
+        """True if this is a CA (Chartered Accountant / accountant) read-only user."""
+        return self.role == "ca"
+
+    def is_viewer(self):
+        return self.role == "viewer"
+
     def is_tenant_user(self):
-        """True if this user belongs to an external tenant (not MedStar internal)."""
+        """True if this user belongs to an external tenant (not internal staff)."""
         return self.tenant_id is not None
 
     def can_upload(self):
@@ -42,15 +50,19 @@ class User(UserMixin):
         return self.role == "admin" and not self.is_tenant_user()
 
     def can_export(self):
-        return True
+        # CA users can export reports but not raw data uploads
+        return self.role in ("admin", "viewer", "ca")
+
+    def can_view_billing(self):
+        return self.role == "admin" and not self.is_ca()
 
     @property
     def role_label(self):
-        return "Admin" if self.is_admin() else "Viewer"
+        return {"admin": "Admin", "viewer": "Viewer", "ca": "Accountant"}.get(self.role, self.role.title())
 
     @property
     def role_color(self):
-        return "#1e7e4b" if self.is_admin() else "#0d6efd"
+        return {"admin": "#1e7e4b", "viewer": "#0d6efd", "ca": "#6f42c1"}.get(self.role, "#6b7280")
 
 
 # -- Engine reference ---------------------------------------------------------
@@ -213,10 +225,10 @@ def deactivate_user(user_id):
         conn.commit()
 
 
-def reactivate_user(user_id):
-    with _get_engine().connect() as conn:
-        conn.execute(
-            text("UPDATE users SET active=1 WHERE id=:id"),
+def list_roles():
+    """Return available role strings."""
+    return ["admin", "viewer", "ca"]
+          text("UPDATE users SET active=1 WHERE id=:id"),
             {"id": user_id},
         )
         conn.commit()
