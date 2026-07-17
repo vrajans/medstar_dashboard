@@ -119,7 +119,7 @@ def generate_pdf(sales_df, purchase_df, start_date, end_date, branch, fmt_inr):
     generated  = date.today().strftime("%d %b %Y")
 
     hdr_tbl = Table([[
-        Paragraph("MedStar Pharmacy — Analytics Report", st["h1"]),
+        Paragraph("InsightHub — Analytics Report", st["h1"]),
         Paragraph(
             "Period: {}  |  Branch: {}  |  Generated: {}".format(
                 period_str, branch_str, generated),

@@ -1,77 +1,74 @@
-# ── Dash / UI ──────────────────────────────────────────────────
+# Dash / UI
 dash>=2.14.0
 dash-bootstrap-components>=1.5.0
 plotly>=5.18.0
 
-# ── Data ───────────────────────────────────────────────────────
+# Data
 pandas>=2.0.0
 sqlalchemy>=2.0.0
 openpyxl>=3.1.0
 xlrd>=2.0.0
 
-# ── Reporting ──────────────────────────────────────────────────
+# Reporting
 reportlab>=4.0
 
-# ── Dash auth (Flask-Login) ────────────────────────────────────
+# Dash auth (Flask-Login)
 flask-login>=0.6
 
-# ── FastAPI service (Day 4) ────────────────────────────────────
+# FastAPI service
 fastapi>=0.111.0
 uvicorn[standard]>=0.29.0
 
-# ── PostgreSQL ─────────────────────────────────────────────────
-asyncpg>=0.29.0          # async driver (FastAPI / SQLAlchemy async)
-psycopg2-binary>=2.9.9   # sync driver (migrate_to_pg.py + SQLAlchemy sync)
+# PostgreSQL
+asyncpg>=0.29.0
+psycopg2-binary>=2.9.9
 
-# ── JWT + password hashing ─────────────────────────────────────
+# JWT + password hashing
 python-jose[cryptography]>=3.3.0
 passlib[bcrypt]>=1.7.4
 
-# ── FastAPI form / file support ────────────────────────────────
+# FastAPI form / file support
 python-multipart>=0.0.9
 
-# ── Environment / config ───────────────────────────────────────
+# Environment / config
 python-dotenv>=1.0.0
 
-# ── Production server ──────────────────────────────────────────────────────
+# Production server
 gunicorn>=21.2.0
 requests>=2.31.0
 
-# ══════════════════════════════════════════════════════════════
+# ==============================================================================
 # Phase 1 & 2 dependencies
-# ══════════════════════════════════════════════════════════════
+# ==============================================================================
 
-# ── Alert channels ─────────────────────────────────────────────
-# Email (SendGrid uses stdlib urllib — no extra package needed)
-# WhatsApp (Interakt / WATI — uses stdlib urllib — no extra package)
-twilio>=8.0.0            # SMS alerts (USA / Global)
-slack-sdk>=3.27.0        # Slack webhook alerts (Phase 2)
+# Alert channels
+# Email: SendGrid uses stdlib urllib -- no extra package needed
+# WhatsApp: Interakt / WATI uses stdlib urllib -- no extra package needed
+twilio>=8.0.0
+slack-sdk>=3.27.0
 
-# ── Scheduling ─────────────────────────────────────────────────
-APScheduler>=3.10.0      # Background job scheduler
+# Scheduling
+APScheduler>=3.10.0
 
-# ── File watching (Marg ERP) ───────────────────────────────────
-watchdog>=4.0.0          # Marg file-drop folder watcher
+# File watching (Marg ERP)
+watchdog>=4.0.0
 
-# ── MFA ────────────────────────────────────────────────────────
-pyotp>=2.9.0             # TOTP / HOTP (Google Authenticator)
-qrcode[pil]>=7.4.2       # QR code generation for MFA setup
+# MFA
+pyotp>=2.9.0
+qrcode[pil]>=7.4.2
 
-# ── Billing ────────────────────────────────────────────────────
-razorpay>=1.4.0          # Razorpay India billing (INR)
-stripe>=9.0.0            # Stripe USA/Global billing (USD)
+# Billing
+razorpay>=1.4.0
+stripe>=9.0.0
 
-# ── QuickBooks OAuth ───────────────────────────────────────────
-intuit-oauth>=1.2.6      # Intuit OAuth 2.0 (QuickBooks)
+# QuickBooks OAuth
+intuit-oauth>=1.2.6
 
-# ── AI / RAG ───────────────────────────────────────────────────
-chromadb>=0.5.0          # Vector store for RAG pipeline
-# groq — uses stdlib urllib (no package needed for REST calls)
-# nomic-embed-text — served via Ollama locally, no Python package
-# openai>=1.0.0         # Uncomment if using OpenAI embeddings
+# AI / RAG
+chromadb>=0.5.0
+# groq         -- uses stdlib urllib, no package needed
+# nomic-embed  -- served via Ollama locally, no Python package
+# openai>=1.0.0  -- uncomment if using OpenAI embeddings
 
-# ── i18n ───────────────────────────────────────────────────────
-# Translation JSON files handled natively — no extra package needed
-
-# ── Export (Phase 2) ───────────────────────────────────────────
-# zipfile — stdlib, no package needed
+# Export
+# zipfile -- stdlib, no package needed

@@ -171,7 +171,7 @@ class TenantCreate(BaseModel):
     name:          str = Field(..., min_length=2, max_length=128)
     slug:          str = Field(..., min_length=2, max_length=64,
                                pattern=r"^[a-z0-9-]+$")   # lowercase, hyphens only
-    domain_type:   str = Field(..., pattern="^(pharmacy|retail)$")
+    domain_type:   str = Field(..., pattern="^(pharmacy|retail|saas|accounting|generic)$")
     plan:          str = Field("basic", pattern="^(basic|pro|enterprise)$")
     contact_email: str = Field("", max_length=256)
 
@@ -215,7 +215,7 @@ class TenantModuleUpdate(BaseModel):
 # ── Schema Mapping schemas ────────────────────────────────────────────────────
 
 class SchemaMappingCreate(BaseModel):
-    domain_type:      str = Field(..., pattern="^(pharmacy|retail)$")
+    domain_type:      str = Field(..., pattern="^(pharmacy|retail|saas|accounting|generic)$")
     entity:           str = Field(..., pattern="^(sales|purchases|inventory)$")
     source_column:    str = Field(..., min_length=1, max_length=128)
     canonical_column: str = Field(..., min_length=1, max_length=128)

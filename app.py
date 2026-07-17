@@ -1,5 +1,5 @@
 """
-app.py - MedStar Pharmacy Analytics Dashboard  (Day 3: Auth + RBAC)
+app.py - InsightHub Analytics Platform  (Multi-tenant SaaS)
 Tabs: Overview | Sales | Purchases | Branch Compare | Upload (admin) | Users (admin)
 Run:  python app.py   then open  http://127.0.0.1:8050
 """
@@ -21,7 +21,8 @@ from flask_login import login_user, logout_user, current_user
 
 from data_loader import (
     get_data, get_upload_history, parse_upload,
-    build_preview, append_upload_to_db, load_from_db
+    build_preview, append_upload_to_db, load_from_db,
+    detect_generic_report,
 )
 from pdf_report  import generate_pdf
 from auth        import init_auth, authenticate, list_users, create_user, \
@@ -33,25 +34,33 @@ from tenant_portal  import render_tenants_tab, call_api, MODULE_LABELS, API_BASE
 from gst_report       import render_gst_tab
 from yoy_report       import render_yoy_tab
 from expiry_dashboard import render_expiry_tab, render_stock_tab, render_cash_credit_tab
-from ai.rag           import (render_ai_chat_tab, rag_answer,
+from ai.rag           import (render_ai_chat_tab, rag_answer, agent_answer,
                                render_user_message, render_assistant_message,
-                               render_anomaly_results, get_anomaly_report)
+                               render_agent_trace, render_anomaly_results,
+                               get_anomaly_report)
+from ai.memory        import init_agent_memory
+from domain_config    import get_domain_config, get_domain_from_format
+from domain_tabs      import render_domain_tab
 from billing          import init_billing_tables, register_billing_routes, BillingEngine, PLANS
 from mfa              import init_mfa_tables, register_mfa_routes, render_mfa_settings_card
 from onboarding       import render_upload_rollback_tab, do_rollback
+from tenant_analytics import load_tenant_df, render_tab as render_tenant_tab
 from referral         import (init_referral_tables, register_referral_routes,
                                render_referral_tab, get_or_create_referral_code)
 
 # ── Load pharmacy data ────────────────────────────────────────
 sales_df, purchase_df, engine = get_data()
 
-# ── Colours ───────────────────────────────────────────────────
-C_GREEN  = "#1e7e4b"
-C_BLUE   = "#0d6efd"
-C_ORANGE = "#fd7e14"
-C_PURPLE = "#6f42c1"
-C_TEAL   = "#0dcaf0"
-_BRANCH_PALETTE = [C_GREEN, C_BLUE, C_ORANGE, C_PURPLE, C_TEAL]
+# ── Brand colours — InsightHub Design System v3 ───────────────
+C_NAVY   = "#1E293B"   # nav, headers
+C_BLUE   = "#2563EB"   # primary brand
+C_SKY    = "#0EA5E9"   # secondary accent
+C_TEAL   = "#0D9488"   # teal
+C_AMBER  = "#D97706"   # warning/costs
+C_PURPLE = "#4F46E5"   # indigo
+C_GREEN  = "#059669"   # positive/success (kept as alias for backwards compat)
+C_ORANGE = "#D97706"   # alias
+_BRANCH_PALETTE = [C_BLUE, C_SKY, C_TEAL, C_PURPLE, C_AMBER]
 
 def get_branch_color_map():
     branches = sorted(set(
@@ -233,7 +242,8 @@ def download_bar():
             btn("Sales Excel",    "btn-dl-sales-xlsx", "success"),
             btn("Purchase CSV",   "btn-dl-purch-csv",  "primary"),
             btn("Purchase Excel", "btn-dl-purch-xlsx", "primary"),
-        ], style={"display":"grid","gridTemplateColumns":"1fr 1fr","gap":"4px",
+        ], id="sidebar-pharmacy-exports",
+           style={"display":"grid","gridTemplateColumns":"1fr 1fr","gap":"4px",
                   "marginBottom":"4px"}),
         dbc.Button("\U0001f4c4 PDF Report", id="btn-dl-pdf", color="dark", size="sm",
                    style={"width":"100%","fontSize":"0.71rem","fontWeight":600}),
@@ -244,18 +254,26 @@ def make_sidebar():
     branches = get_filter_options()
     data_min, data_max = _data_date_bounds()
     return html.Div([
-        html.Div("\U0001f3ea", style={"fontSize":"2rem","textAlign":"center","marginBottom":"0.4rem"}),
-        html.Div("InsightHub", style={"fontWeight":700,"textAlign":"center",
-                                      "fontSize":"1rem","color":C_GREEN}),
-        html.Div("Analytics",  style={"fontWeight":600,"textAlign":"center",
-                                      "fontSize":"0.75rem","color":"#6b7c6b",
-                                      "marginBottom":"1rem"}),
+        html.Div([
+            html.Span("\U0001f4ca", id="sidebar-logo-icon", style={
+                "fontSize":"1.1rem","lineHeight":"1",
+            }),
+            html.Span("InsightHub", style={
+                "fontWeight":800,"fontSize":"0.88rem","color":C_NAVY,
+                "letterSpacing":"-0.2px","marginLeft":"6px",
+            }),
+        ], style={"display":"flex","alignItems":"center","justifyContent":"center",
+                  "marginBottom":"0.25rem"}),
+        html.Div("Analytics", style={
+            "fontWeight":500,"textAlign":"center","fontSize":"0.65rem",
+            "color":"#64748B","marginBottom":"0.9rem","letterSpacing":"0.04em",
+        }),
         html.Div(className="s-divider"),
-        html.Div("Branch", className="sidebar-label"),
+        html.Div("Branch", className="sidebar-label", id="sidebar-filter-label"),
         dcc.Dropdown(id="filter-branch",
                      options=[{"label":b,"value":b} for b in branches],
                      value="All", clearable=False,
-                     style={"fontSize":"0.83rem","marginBottom":"0.75rem"}),
+                     style={"fontSize":"0.75rem","marginBottom":"0.6rem"}),
         html.Div("Date Range", className="sidebar-label"),
         html.Div([
             html.Button("This M", id="qs-this", n_clicks=0, className="qs-btn"),
@@ -275,33 +293,61 @@ def make_sidebar():
         html.Div(className="s-divider"),
         download_bar(),
         html.Div(className="s-divider"),
-        html.Div("Data Status", className="sidebar-label"),
+        html.Div("Data Status", className="sidebar-label", id="sidebar-data-status-label"),
         html.Div(id="sidebar-data-status"),
         html.Div(className="s-divider"),
-        html.Div("Sources", className="sidebar-label"),
+        html.Div("Sources", className="sidebar-label", id="sidebar-sources-label"),
         html.Div(id="sidebar-sources"),
+        html.Div(className="s-divider"),
+        html.Div(id="sidebar-domain-badge"),
     ], className="sidebar", style={"width":"210px","minWidth":"210px"})
 
 # ── Navbar ────────────────────────────────────────────────────
 def make_navbar():
     return dbc.Navbar(
         dbc.Container([
+            # Left: logo + product name + tenant subtitle
             html.Div([
-                html.Span("\U0001f3e5 "),
-                html.Span("MedStar Pharmacy",
-                          style={"fontWeight":700,"fontSize":"1.15rem"}),
-                html.Span("  Multi-Branch Analytics",
-                          style={"fontSize":"0.78rem","opacity":"0.8","marginLeft":"0.5rem"}),
-            ]),
+                html.Div([
+                    html.Span(id="navbar-brand-icon", children="📊", style={
+                        "fontSize":"1.25rem","marginRight":"9px","verticalAlign":"middle",
+                        "display":"inline-flex","alignItems":"center","justifyContent":"center",
+                        "width":"32px","height":"32px","borderRadius":"8px",
+                        "background":"linear-gradient(135deg,#2563EB,#0EA5E9)",
+                    }),
+                    html.Span(id="navbar-brand-name", children="InsightHub", style={
+                        "fontWeight":800,"fontSize":"1.1rem","letterSpacing":"-0.3px",
+                        "color":"#FFFFFF","verticalAlign":"middle",
+                    }),
+                ], style={"display":"flex","alignItems":"center"}),
+                html.Span(id="navbar-brand-subtitle",
+                          children="Analytics Platform",
+                          style={
+                              "fontSize":"0.7rem","color":"rgba(255,255,255,0.40)",
+                              "marginLeft":"41px","letterSpacing":"0.03em",
+                          }),
+            ], style={"lineHeight":"1.3"}),
+
+            # Center: period label
+            html.Span(id="navbar-period-label", style={
+                "fontSize":"0.72rem","color":"rgba(255,255,255,0.50)",
+                "position":"absolute","left":"50%","transform":"translateX(-50%)",
+            }),
+
+            # Right: user chip + sign out
             html.Div([
-                html.Span(id="navbar-period-label",
-                          style={"fontSize":"0.72rem","opacity":"0.8","marginRight":"1.2rem"}),
                 html.Div(id="navbar-user-info",
                          style={"display":"flex","alignItems":"center","gap":"8px"}),
-            ], style={"display":"flex","alignItems":"center","marginLeft":"auto"}),
-        ], fluid=True),
-        color=C_GREEN, dark=True,
-        style={"padding":"0 1.25rem","height":"62px"},
+            ], style={"display":"flex","alignItems":"center","marginLeft":"auto","gap":"8px"}),
+        ], fluid=True, style={"position":"relative"}),
+        dark=True,
+        style={
+            "background": C_NAVY,
+            "padding":"0 1.25rem",
+            "height":"62px",
+            "boxShadow":"0 1px 0 rgba(255,255,255,0.06),0 2px 12px rgba(0,0,0,0.25)",
+            "position":"sticky","top":"0","zIndex":"200",
+        },
     )
 
 # ── Dash app ──────────────────────────────────────────────────
@@ -309,7 +355,7 @@ app = dash.Dash(
     __name__,
     external_stylesheets=[dbc.themes.BOOTSTRAP],
     suppress_callback_exceptions=True,
-    title="MedStar Analytics",
+    title="InsightHub Analytics",
 )
 
 # ── Init auth (must happen after app is created) ──────────────
@@ -328,6 +374,152 @@ try:
 except Exception as _init_err:
     print(f"[app] Phase 1/2 init warning: {_init_err}")
 
+# ── Multi-Agent Memory (SQLite — zero external deps) ─────────
+_agent_memory = None
+try:
+    _agent_memory = init_agent_memory(DB_PATH)
+    print("[app] Multi-Agent Memory ready")
+except Exception as _mem_err:
+    print(f"[app] Agent Memory init warning: {_mem_err}")
+
+
+# ── Local SQLite tenant store (fallback when FastAPI is offline) ──────────────
+def _init_local_tenants():
+    """Create a local tenants table in the auth SQLite DB if it doesn't exist."""
+    from sqlalchemy import text as _text
+    try:
+        with auth_engine.connect() as conn:
+            conn.execute(_text("""
+                CREATE TABLE IF NOT EXISTS local_tenants (
+                    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name          TEXT NOT NULL,
+                    slug          TEXT UNIQUE NOT NULL,
+                    domain_type   TEXT DEFAULT 'pharmacy',
+                    plan          TEXT DEFAULT 'basic',
+                    contact_email TEXT DEFAULT '',
+                    is_active     INTEGER DEFAULT 1,
+                    created_at    TEXT DEFAULT (datetime('now')),
+                    country       TEXT DEFAULT 'IN',
+                    currency      TEXT DEFAULT 'INR'
+                )
+            """))
+            # Add currency/country columns to existing DBs
+            for _col, _def in [("country", "TEXT DEFAULT 'IN'"), ("currency", "TEXT DEFAULT 'INR'")]:
+                try:
+                    conn.execute(_text(f"ALTER TABLE local_tenants ADD COLUMN {_col} {_def}"))
+                except Exception:
+                    pass
+            conn.commit()
+    except Exception:
+        pass
+
+_init_local_tenants()
+
+
+def _create_tenant_local(name, slug, domain_type, plan, email) -> tuple[bool, str]:
+    """Insert a tenant directly into local SQLite. Returns (success, message)."""
+    from sqlalchemy import text as _text
+    try:
+        with auth_engine.connect() as conn:
+            conn.execute(_text("""
+                INSERT INTO local_tenants (name, slug, domain_type, plan, contact_email)
+                VALUES (:name, :slug, :domain, :plan, :email)
+            """), {"name": name, "slug": slug, "domain": domain_type,
+                   "plan": plan, "email": email})
+            conn.commit()
+        return True, f"Tenant '{name}' created locally (FastAPI offline — data saved to SQLite)."
+    except Exception as exc:
+        return False, str(exc)
+
+
+def _list_tenants_local() -> list[dict]:
+    """Read tenants from local SQLite."""
+    from sqlalchemy import text as _text
+    try:
+        with auth_engine.connect() as conn:
+            rows = conn.execute(_text(
+                "SELECT id, name, slug, domain_type, plan, is_active, "
+                "contact_email, created_at FROM local_tenants ORDER BY id DESC"
+            )).fetchall()
+        return [
+            {
+                "id":      r[0],
+                "Name":    r[1],
+                "Slug":    r[2],
+                "Domain":  (r[3] or "pharmacy").capitalize(),
+                "Plan":    (r[4] or "basic").capitalize(),
+                "Status":  "Active" if r[5] else "Inactive",
+                "Contact": r[6] or "",
+                "Created": (r[7] or "")[:10],
+            }
+            for r in rows
+        ]
+    except Exception:
+        return []
+
+
+def _get_active_domain(tenant_id: int = 0) -> str:
+    """Return the active domain for a tenant.
+
+    Priority:
+      1. current_user.tenant_domain — stored in SQLite at user-creation time (fastest)
+      2. Agent Memory 'detected_domain' — set after a file upload (most accurate)
+      3. FastAPI or local SQLite tenant record
+      4. Fallback: 'pharmacy'
+    """
+    # 1. Read directly from the logged-in user object — zero network calls
+    try:
+        from flask_login import current_user as _cu
+        if _cu.is_authenticated and _cu.is_tenant_user():
+            dom = getattr(_cu, "tenant_domain", None)
+            if dom and dom != "pharmacy" or (dom == "pharmacy" and tenant_id == 0):
+                return dom
+    except Exception:
+        pass
+
+    # 2. Check agent memory (overrides after data upload)
+    if _agent_memory is not None and tenant_id:
+        try:
+            prefs = _agent_memory.get_preferences(tenant_id)
+            if prefs.get("detected_domain"):
+                return prefs["detected_domain"]
+        except Exception:
+            pass
+
+    if not tenant_id:
+        return "pharmacy"
+
+    # 3a. Try local SQLite tenants table (fast, no network)
+    try:
+        from sqlalchemy import text as _text
+        with auth_engine.connect() as conn:
+            row = conn.execute(
+                _text("SELECT domain_type FROM local_tenants WHERE id = :tid"),
+                {"tid": tenant_id},
+            ).fetchone()
+            if row and row[0]:
+                return row[0]
+    except Exception:
+        pass
+
+    # 3b. Try FastAPI (last resort — network call)
+    try:
+        from tenant_portal import call_api
+        status, data = call_api("GET", f"/tenants/{tenant_id}")
+        if status == 200 and isinstance(data, dict):
+            domain = data.get("domain_type", "")
+            if domain:
+                if _agent_memory is not None:
+                    try:
+                        _agent_memory.save_preferences(tenant_id, {"detected_domain": domain})
+                    except Exception:
+                        pass
+                return domain
+    except Exception:
+        pass
+
+    return "pharmacy"
+
 # ── Register new Flask routes ─────────────────────────────────
 try:
     register_billing_routes(app.server, auth_engine)
@@ -338,6 +530,21 @@ try:
     register_qb_routes(app.server, auth_engine)
 except Exception as _route_err:
     print(f"[app] Route registration warning: {_route_err}")
+
+# ── Stripe billing routes ─────────────────────────────────────
+try:
+    from stripe_billing import register_stripe_routes
+    register_stripe_routes(app.server, engine)
+except Exception as _stripe_err:
+    print(f"[app] Stripe init warning: {_stripe_err}")
+
+# ── Self-serve signup routes ──────────────────────────────────
+try:
+    from signup import register_signup_routes
+    _app_base_url = _os.environ.get("APP_BASE_URL", "http://localhost:8050")
+    register_signup_routes(app.server, engine, base_url=_app_base_url)
+except Exception as _signup_err:
+    print(f"[app] Signup init warning: {_signup_err}")
 
 # ── Flask auth routes ─────────────────────────────────────────
 
@@ -436,12 +643,16 @@ app.layout = html.Div([
                      children=[
                 # ── Core tabs (always visible) ────────────────────────────
                 dcc.Tab(label="Overview",       value="overview",
+                        id="tab-overview",
                         className="custom-tab", selected_className="custom-tab--selected"),
                 dcc.Tab(label="Sales",          value="sales",
+                        id="tab-sales",
                         className="custom-tab", selected_className="custom-tab--selected"),
                 dcc.Tab(label="Purchases",      value="purchases",
+                        id="tab-purchases",
                         className="custom-tab", selected_className="custom-tab--selected"),
                 dcc.Tab(label="Branch Compare", value="compare",
+                        id="tab-compare",
                         className="custom-tab", selected_className="custom-tab--selected"),
                 # ── Phase 1 new tabs ──────────────────────────────────────
                 dcc.Tab(label="YoY Analysis",   value="yoy",
@@ -498,13 +709,32 @@ _TAB_SHOW = {}               # visible
 _TAB_HIDE = {"display":"none"}  # hidden
 
 @app.callback(
-    Output("navbar-user-info", "children"),
-    Output("tab-upload",       "style"),
-    Output("tab-rollback",     "style"),
-    Output("tab-users",        "style"),
-    Output("tab-tenants",      "style"),
-    Output("tab-billing",      "style"),
-    Input("data-version",      "data"),
+    Output("navbar-user-info",      "children"),
+    Output("navbar-brand-icon",     "children"),
+    Output("navbar-brand-name",     "children"),
+    Output("navbar-brand-subtitle", "children"),
+    # Domain-adaptive tab labels
+    Output("tab-sales",      "label"),
+    Output("tab-purchases",  "label"),
+    Output("tab-compare",    "label"),
+    Output("tab-gst",        "label"),
+    Output("tab-stock",      "label"),
+    Output("tab-cashcredit", "label"),
+    # Domain-adaptive tab visibility
+    Output("tab-sales",      "style"),
+    Output("tab-purchases",  "style"),
+    Output("tab-compare",    "style"),
+    Output("tab-gst",        "style"),
+    Output("tab-expiry",     "style"),
+    Output("tab-stock",      "style"),
+    Output("tab-cashcredit", "style"),
+    # Admin RBAC tabs
+    Output("tab-upload",     "style"),
+    Output("tab-rollback",   "style"),
+    Output("tab-users",      "style"),
+    Output("tab-tenants",    "style"),
+    Output("tab-billing",    "style"),
+    Input("data-version",    "data"),
 )
 def update_navbar_user(_v):
     try:
@@ -512,22 +742,44 @@ def update_navbar_user(_v):
         authed      = u.is_authenticated
         is_admin    = authed and u.is_admin()
         is_tenant   = authed and u.is_tenant_user()
-        # CA / Accountant role (read-only) — can see analytics but not upload/users/billing
         is_ca       = authed and getattr(u, "role", "") == "ca"
         display     = u.display_name if authed else "Guest"
         role        = u.role_label   if authed else ""
         role_col    = u.role_color   if authed else C_BLUE
         tenant_name = u.tenant_name  if (authed and is_tenant) else None
+        tenant_id   = u.tenant_id    if (authed and is_tenant) else None
     except Exception:
-        is_admin  = False
-        is_tenant = False
-        is_ca     = False
-        display   = "Guest"
-        role      = ""
-        role_col  = C_BLUE
+        is_admin    = False
+        is_tenant   = False
+        is_ca       = False
+        display     = "Guest"
+        role        = ""
+        role_col    = C_BLUE
         tenant_name = None
+        tenant_id   = None
 
-    # MFA indicator
+    # ── Detect domain for this user ──────────────────────────────────────────
+    try:
+        from domain_config import get_domain_config
+        if is_tenant and tenant_id:
+            active_domain = _get_active_domain(int(tenant_id))
+        else:
+            active_domain = "pharmacy"  # InsightHub internal = pharmacy default
+        domain_cfg = get_domain_config(active_domain)
+    except Exception:
+        active_domain = "pharmacy"
+        domain_cfg    = {}
+
+    # ── Navbar brand ─────────────────────────────────────────────────────────
+    brand_icon = domain_cfg.get("icon", "🏢") + " "
+    if is_tenant and tenant_name:
+        brand_name     = tenant_name
+        brand_subtitle = f"  {domain_cfg.get('label', 'Analytics')} · Powered by InsightHub"
+    else:
+        brand_name     = "InsightHub"
+        brand_subtitle = "  Analytics Platform"
+
+    # ── MFA indicator ────────────────────────────────────────────────────────
     mfa_icon = []
     try:
         from sqlalchemy import text
@@ -540,45 +792,97 @@ def update_navbar_user(_v):
     except Exception:
         pass
 
-    # Subtitle for tenant users
-    subtitle = []
-    if tenant_name:
-        subtitle = [html.Span(f"│ {tenant_name}",
-                              style={"fontSize":"0.72rem","color":"rgba(255,255,255,0.65)",
-                                     "marginLeft":"4px"})]
-
+    # Initials avatar
+    initials = "".join(w[0].upper() for w in display.split() if w)[:2] or "?"
     user_info = html.Div([
-        html.Span(display, style={"fontSize":"0.8rem","fontWeight":600,"color":"white"}),
-        *subtitle,
+        # Avatar circle with initials
+        html.Div(initials, style={
+            "width":"32px","height":"32px","borderRadius":"50%",
+            "background":f"linear-gradient(135deg,{role_col},{C_SKY})",
+            "display":"flex","alignItems":"center","justifyContent":"center",
+            "fontSize":"0.7rem","fontWeight":700,"color":"white","flexShrink":0,
+        }),
+        # Name + role
+        html.Div([
+            html.Div(display, style={"fontSize":"0.78rem","fontWeight":600,"color":"#F1F5F9","lineHeight":"1.2"}),
+            html.Div(role,    style={"fontSize":"0.62rem","color":"rgba(255,255,255,0.45)","lineHeight":"1.2"}),
+        ], style={"lineHeight":"1.2"}),
         *mfa_icon,
-        html.Span(role,
-                  style={"fontSize":"0.65rem","fontWeight":700,"padding":"2px 7px",
-                         "borderRadius":"20px","background":"rgba(255,255,255,0.2)",
-                         "color":"white"}),
-        html.A("Sign Out", href="/logout",
-               style={"fontSize":"0.72rem","color":"rgba(255,255,255,0.8)",
-                      "textDecoration":"none","borderLeft":"1px solid rgba(255,255,255,0.3)",
-                      "paddingLeft":"10px","marginLeft":"2px"}),
-    ], style={"display":"flex","alignItems":"center","gap":"8px"})
+        # Divider
+        html.Div(style={"width":"1px","height":"22px","background":"rgba(255,255,255,0.12)","margin":"0 2px"}),
+        # Sign out
+        html.A("Sign Out", href="/logout", style={
+            "fontSize":"0.72rem","color":"rgba(255,255,255,0.55)",
+            "textDecoration":"none","whiteSpace":"nowrap",
+            "transition":"color 0.15s",
+        }),
+    ], style={"display":"flex","alignItems":"center","gap":"8px",
+              "background":"rgba(255,255,255,0.05)","borderRadius":"8px",
+              "padding":"5px 10px 5px 8px","border":"1px solid rgba(255,255,255,0.08)"})
 
-    # ── RBAC tab visibility ──────────────────────────────────────────────────
-    # Upload Data  → internal admin only (not tenant, not CA)
-    # Upload History (Rollback) → same as upload
-    # Users        → any admin (including tenant admin)
-    # Tenants      → internal admin only
-    # Billing      → internal admin only
-    # Phase 1 tabs (YoY, GST, Expiry, Stock, Cash/Credit) → everyone inc CA
-    # AI Chat      → everyone (falls back gracefully if GROQ_API_KEY not set)
+    # ── Domain-adaptive tab labels & visibility ──────────────────────────────
+    # Map domain config tab IDs to the dash tab slots we have:
+    #   sales slot     → revenue / sales / income
+    #   purchases slot → costs / purchases / expenses
+    #   compare slot   → customers / branch compare
+    #   gst slot       → tax report / gst
+    #   stock slot     → inventory / stock
+    #   cashcredit slot→ cash flow / cash/credit
 
+    _domain_tabs = {t["id"] for t in domain_cfg.get("tabs", [])}
+
+    def _tab_label(primary_id, fallback_label):
+        """Return label from domain config tabs if present, else fallback."""
+        for t in domain_cfg.get("tabs", []):
+            if t["id"] == primary_id:
+                return t["icon"] + " " + t["label"]
+        return fallback_label
+
+    def _show_if(*tab_ids):
+        """Show tab if ANY of the given tab_ids appear in the domain's tab list."""
+        return _TAB_SHOW if any(tid in _domain_tabs for tid in tab_ids) else _TAB_HIDE
+
+    # Sales slot: revenue / sales / income
+    sales_label = _tab_label("revenue",   _tab_label("sales",    "Sales"))
+    # Purchases slot: costs / purchases / expenses
+    purch_label = _tab_label("costs",     _tab_label("purchases", "Purchases"))
+    # Compare slot: customers / compare
+    comp_label  = _tab_label("customers", _tab_label("compare",   "Branch Compare"))
+    # GST slot: gst / tax
+    gst_label   = _tab_label("gst",       "GST / Tax")
+    # Stock slot: inventory / stock
+    stock_label = _tab_label("inventory", _tab_label("stock",     "Stock"))
+    # Cashcredit slot: cashflow / cashcredit
+    cash_label  = _tab_label("cashflow",  "Cash/Credit")
+
+    sales_style  = _show_if("revenue",   "sales")
+    purch_style  = _show_if("costs",     "purchases")
+    comp_style   = _show_if("customers", "compare")
+    gst_style    = _show_if("gst")
+    expiry_style = _show_if("expiry")
+    stock_style  = _show_if("inventory", "stock")
+    cash_style   = _show_if("cashflow",  "cashcredit")
+
+    # ── RBAC admin tabs ──────────────────────────────────────────────────────
     internal_admin = is_admin and not is_tenant and not is_ca
-    upload_style   = _TAB_SHOW if internal_admin else _TAB_HIDE
+    # Upload: both internal admins AND tenant admins can upload their own data
+    upload_style   = _TAB_SHOW if is_admin else _TAB_HIDE
     rollback_style = _TAB_SHOW if internal_admin else _TAB_HIDE
+    # Users: both internal admins AND tenant admins (scoped to their tenant)
     users_style    = _TAB_SHOW if is_admin else _TAB_HIDE
     tenants_style  = _TAB_SHOW if internal_admin else _TAB_HIDE
     billing_style  = _TAB_SHOW if internal_admin else _TAB_HIDE
 
-    return (user_info, upload_style, rollback_style,
-            users_style, tenants_style, billing_style)
+    return (
+        user_info, brand_icon, brand_name, brand_subtitle,
+        # labels
+        sales_label, purch_label, comp_label, gst_label, stock_label, cash_label,
+        # domain visibility
+        sales_style, purch_style, comp_style, gst_style,
+        expiry_style, stock_style, cash_style,
+        # admin RBAC
+        upload_style, rollback_style, users_style, tenants_style, billing_style,
+    )
 
 # ── Quick-select ──────────────────────────────────────────────
 @app.callback(
@@ -622,8 +926,8 @@ def _render_tenant_welcome(tenant_name):
                            "border":"none","borderTop":"2px solid #e2e8f0"}),
             html.Div([
                 html.Div([
-                    html.Span("🔒", style={"fontSize":"1.4rem"}),
-                    html.P("Analytics data is restricted to MedStar internal users.",
+                    html.Span("📤", style={"fontSize":"1.4rem"}),
+                    html.P("Upload your data using the Upload Data tab to get started.",
                            style={"fontSize":"0.8rem","color":"#94a3b8","margin":"4px 0 0"}),
                 ], style={"textAlign":"center","padding":"1rem",
                           "background":"#f8fafc","borderRadius":"12px",
@@ -635,11 +939,13 @@ def _render_tenant_welcome(tenant_name):
 
 # ── Tab router ────────────────────────────────────────────────
 @app.callback(
-    Output("tab-content",         "children"),
-    Output("filter-branch",       "options"),
-    Output("sidebar-sources",     "children"),
-    Output("sidebar-data-status", "children"),
-    Output("navbar-period-label", "children"),
+    Output("tab-content",          "children"),
+    Output("filter-branch",        "options"),
+    Output("sidebar-sources",      "children"),
+    Output("sidebar-data-status",  "children"),
+    Output("navbar-period-label",  "children"),
+    Output("sidebar-domain-badge", "children"),
+    Output("sidebar-pharmacy-exports", "style"),
     Input("main-tabs",    "value"),
     Input("filter-branch","value"),
     Input("filter-date",  "start_date"),
@@ -660,43 +966,167 @@ def render_tab(tab, branch, start_date, end_date, _version):
     if tab in ("upload","users") and not is_admin:
         tab = "overview"
 
-    # ── Tenant data fence ────────────────────────────────────────
-    # External tenant users (e.g. Right Pharmacy) must never see MedStar's
-    # internal sales/purchase analytics. Show them a dedicated welcome page.
-    _analytics_tabs = ("overview", "sales", "purchases", "compare", "upload")
-    if is_tenant and tab in _analytics_tabs:
-        welcome = _render_tenant_welcome(tenant_name)
-        # Return early with safe empty values for sidebar/navbar outputs
-        branches = get_filter_options()
-        b_opts   = [{"label":b,"value":b} for b in branches]
-        return welcome, b_opts, [], html.Div(), ""
+    # ── Resolve tenant domain before the fence ──────────────────────
+    try:
+        _tid_for_fence = int(current_user.tenant_id) if (
+            current_user.is_authenticated and is_tenant and current_user.tenant_id
+        ) else 0
+    except Exception:
+        _tid_for_fence = 0
+    _active_domain_fence = _get_active_domain(_tid_for_fence) if _tid_for_fence else "pharmacy"
+    _is_pharmacy_tenant  = (_active_domain_fence == "pharmacy")
+
+    # ── Tenant data fence (SECURITY — do not relax without per-tenant data loading) ──
+    # The global sales_df / purchase_df belong exclusively to the MedStar internal
+    # account.  They must NEVER be visible to any external tenant user, regardless
+    # of domain type.  Tenants are fenced here until per-tenant data upload +
+    # isolated storage is wired up (Phase 2 roadmap item).
+    #
+    # Allowed tabs for tenants: upload (their own data), tenants (portal), login.
+    # All analytics tabs (overview, sales, purchases, compare, cashflow, inventory,
+    # yoy, gst, expiry, stock, threshold, billing) are blocked until the tenant has
+    # uploaded their own dataset.
+    _TENANT_ANALYTICS_TABS = (
+        "overview", "sales", "purchases", "compare",
+        "cashflow", "inventory", "yoy", "gst",
+        "expiry", "stock", "threshold", "billing",
+    )
+    if is_tenant and tab in _TENANT_ANALYTICS_TABS:
+        # Check whether this tenant has uploaded any data of their own
+        _tenant_has_data = False
+        try:
+            _t_id_check = int(current_user.tenant_id) if current_user.tenant_id else None
+            if _t_id_check:
+                from data_loader import get_upload_history
+                _hist = get_upload_history(auth_engine, tenant_id=_t_id_check)
+                _tenant_has_data = not _hist.empty
+        except Exception:
+            _tenant_has_data = False
+
+        if not _tenant_has_data:
+            # No tenant-specific data — show upload prompt
+            welcome = _render_tenant_welcome(tenant_name)
+            return welcome, [], [], html.Div(), "", html.Div(), {"display":"none"}
+
+        # Tenant HAS uploaded data — render real per-tenant analytics (Phase 2)
+        _t_err = None
+        try:
+            _t_id_data = int(current_user.tenant_id) if current_user.tenant_id else None
+            if _t_id_data:
+                _t_sales, _t_purchases = load_tenant_df(engine, _t_id_data)
+                print(f"[tenant] id={_t_id_data} sales={len(_t_sales)} purchases={len(_t_purchases)}")
+                # Apply date range filter from sidebar
+                for _df in (_t_sales, _t_purchases):
+                    if not _df.empty and "bill_date" in _df.columns:
+                        _df["bill_date"] = pd.to_datetime(_df["bill_date"], errors="coerce")
+                if start_date and not _t_sales.empty and "bill_date" in _t_sales.columns:
+                    _t_sales = _t_sales[_t_sales["bill_date"] >= pd.to_datetime(start_date)]
+                if end_date and not _t_sales.empty and "bill_date" in _t_sales.columns:
+                    _t_sales = _t_sales[_t_sales["bill_date"] <= pd.to_datetime(end_date)]
+                if start_date and not _t_purchases.empty and "bill_date" in _t_purchases.columns:
+                    _t_purchases = _t_purchases[_t_purchases["bill_date"] >= pd.to_datetime(start_date)]
+                if end_date and not _t_purchases.empty and "bill_date" in _t_purchases.columns:
+                    _t_purchases = _t_purchases[_t_purchases["bill_date"] <= pd.to_datetime(end_date)]
+                # Apply client/branch filter
+                if branch and branch != "All" and not _t_sales.empty and "supplier_name" in _t_sales.columns:
+                    _t_sales = _t_sales[_t_sales["supplier_name"] == branch]
+            else:
+                _t_sales, _t_purchases = pd.DataFrame(), pd.DataFrame()
+                _t_err = "Tenant ID not found on session."
+        except Exception as _te:
+            _t_sales, _t_purchases = pd.DataFrame(), pd.DataFrame()
+            _t_err = str(_te)
+            print(f"[tenant] load error: {_te}")
+        _t_name = tenant_name or "Your Business"
+        # Look up tenant currency (default USD for SaaS tenants, INR for pharmacy)
+        _t_cur = "$"
+        try:
+            _t_id_cur = int(current_user.tenant_id) if current_user.tenant_id else None
+            if _t_id_cur:
+                with engine.connect() as _cc:
+                    _cur_row = _cc.execute(
+                        text("SELECT currency FROM local_tenants WHERE id=:tid"),
+                        {"tid": _t_id_cur}
+                    ).fetchone()
+                    if _cur_row and _cur_row[0]:
+                        _sym_map = {"USD": "$", "INR": "₹", "EUR": "€", "GBP": "£",
+                                    "CAD": "CA$", "AUD": "A$", "SGD": "S$"}
+                        _t_cur = _sym_map.get(_cur_row[0], _cur_row[0])
+        except Exception:
+            pass
+        analytics_content = render_tenant_tab(tab, _t_sales, _t_purchases, _t_name,
+                                              error=_t_err, cur=_t_cur)
+        # Populate sidebar Client dropdown with tenant's unique customers
+        _t_clients = []
+        try:
+            if not _t_sales.empty and "supplier_name" in _t_sales.columns:
+                # Reload all (unfiltered) to get full client list
+                _all_s, _ = load_tenant_df(engine, _t_id_data)
+                _clients = sorted(_all_s["supplier_name"].dropna().unique().tolist())
+                _t_clients = [{"label": "All Clients", "value": "All"}] +                              [{"label": c, "value": c} for c in _clients]
+            elif not _t_purchases.empty and "supplier_name" in _t_purchases.columns:
+                _clients = sorted(_t_purchases["supplier_name"].dropna().unique().tolist())
+                _t_clients = [{"label": "All", "value": "All"}] +                              [{"label": c, "value": c} for c in _clients]
+        except Exception:
+            _t_clients = []
+        return analytics_content, _t_clients, [], html.Div(), "", html.Div(), {"display":"none"}
 
     branches = get_filter_options()
-    b_opts   = [{"label":b,"value":b} for b in branches]
     BCM      = get_branch_color_map()
 
-    all_b = sorted(set(
-        (sales_df["branch"].unique().tolist()    if not sales_df.empty    else []) +
-        (purchase_df["branch"].unique().tolist() if not purchase_df.empty else [])
-    ))
-    sources = [
-        html.Div([
-            html.Span(className="source-dot", style={"background":BCM.get(b,C_TEAL)}),
-            html.Span(b, style={"fontSize":"0.72rem","color":"#555"}),
-        ], className="source-item")
-        for b in all_b
-    ]
-
-    s_rows = len(sales_df)    if not sales_df.empty    else 0
-    p_rows = len(purchase_df) if not purchase_df.empty else 0
-    dm, dx = _data_date_bounds()
-    status = html.Div([
-        html.Div([html.Span("Sales rows"),    html.Span("{:,}".format(s_rows), className="stat-val")], className="stat-row"),
-        html.Div([html.Span("Purchase rows"), html.Span("{:,}".format(p_rows), className="stat-val")], className="stat-row"),
-        html.Div([html.Span("Span"),
-                  html.Span("{} - {}".format(dm.strftime("%b %y"), dx.strftime("%b %y")),
-                            className="stat-val")], className="stat-row"),
-    ], className="data-status")
+    # SECURITY: tenant users must never see MedStar's branch names or row counts
+    # in the sidebar — even when on admin-permitted tabs (Users, Upload).
+    if is_tenant:
+        b_opts  = []
+        sources = []
+        # Show actual upload count if tenant has data, else prompt to upload
+        try:
+            _t_sid = int(current_user.tenant_id) if current_user.tenant_id else None
+            _t_hist = get_upload_history(auth_engine, tenant_id=_t_sid) if _t_sid else None
+            _t_rows = int(_t_hist["row_count"].sum()) if (_t_hist is not None and not _t_hist.empty) else 0
+            _t_files = len(_t_hist) if (_t_hist is not None and not _t_hist.empty) else 0
+        except Exception:
+            _t_rows = 0
+            _t_files = 0
+        if _t_rows > 0:
+            status = html.Div([
+                html.Div([
+                    html.Span(f"{_t_rows:,} rows", style={"fontWeight":700,"color":C_GREEN}),
+                    html.Span(" loaded", style={"color":"#64748b","fontSize":"0.78rem"}),
+                ], className="stat-row"),
+                html.Div([
+                    html.Span(f"{_t_files} file{'s' if _t_files != 1 else ''} uploaded",
+                              style={"color":"#94a3b8","fontSize":"0.75rem"}),
+                ], className="stat-row"),
+            ], className="data-status")
+        else:
+            status = html.Div([
+                html.Div([html.Span("Upload your data to see analytics.")],
+                         className="stat-row"),
+            ], className="data-status")
+    else:
+        b_opts = [{"label":b,"value":b} for b in branches]
+        all_b  = sorted(set(
+            (sales_df["branch"].unique().tolist()    if not sales_df.empty    else []) +
+            (purchase_df["branch"].unique().tolist() if not purchase_df.empty else [])
+        ))
+        sources = [
+            html.Div([
+                html.Span(className="source-dot", style={"background":BCM.get(b,C_TEAL)}),
+                html.Span(b, style={"fontSize":"0.72rem","color":"#555"}),
+            ], className="source-item")
+            for b in all_b
+        ]
+        s_rows = len(sales_df)    if not sales_df.empty    else 0
+        p_rows = len(purchase_df) if not purchase_df.empty else 0
+        dm, dx = _data_date_bounds()
+        status = html.Div([
+            html.Div([html.Span("Sales rows"),    html.Span("{:,}".format(s_rows), className="stat-val")], className="stat-row"),
+            html.Div([html.Span("Purchase rows"), html.Span("{:,}".format(p_rows), className="stat-val")], className="stat-row"),
+            html.Div([html.Span("Span"),
+                      html.Span("{} - {}".format(dm.strftime("%b %y"), dx.strftime("%b %y")),
+                                className="stat-val")], className="stat-row"),
+        ], className="data-status")
 
     try:
         s_str = pd.to_datetime(start_date).strftime("%d %b %Y") if start_date else "All"
@@ -713,15 +1143,49 @@ def render_tab(tab, branch, start_date, end_date, _version):
     except Exception:
         _tid = None
 
+    # ── Detect active domain ──────────────────────────────────────
+    try:
+        _tenant_id_int = int(_tid) if _tid else 0
+    except Exception:
+        _tenant_id_int = 0
+    active_domain = _get_active_domain(_tenant_id_int)
+    is_pharmacy   = (active_domain == "pharmacy")
+
+    # ── Domain-adaptive KPI data for non-pharmacy tabs ────────────
+    _kpi_data_for_domain = {
+        "sales":      sales_df["net_amount"].sum()   if not sales_df.empty and "net_amount" in sales_df.columns else 0,
+        "purchases":  purchase_df["net_amount"].sum() if not purchase_df.empty and "net_amount" in purchase_df.columns else 0,
+        "margin":     sales_df["margin_pct"].mean()  if not sales_df.empty and "margin_pct" in sales_df.columns else 0,
+        "bills":      int(sales_df["total_bills"].sum()) if not sales_df.empty and "total_bills" in sales_df.columns else len(sales_df),
+        "top_branch": sales_df.groupby("branch")["net_amount"].sum().idxmax() if (not sales_df.empty and "branch" in sales_df.columns and "net_amount" in sales_df.columns) else "—",
+    }
+
     # ── Tab routing ───────────────────────────────────────────────
-    if   tab == "overview":
-        content = render_overview(branch, start_date, end_date)
+    if tab == "overview":
+        if is_pharmacy:
+            content = render_overview(branch, start_date, end_date)
+        else:
+            content = render_domain_tab("overview", sales_df, purchase_df, _kpi_data_for_domain, active_domain)
     elif tab == "sales":
-        content = render_sales(branch, start_date, end_date)
+        if is_pharmacy:
+            content = render_sales(branch, start_date, end_date)
+        else:
+            content = render_domain_tab("revenue", sales_df, purchase_df, _kpi_data_for_domain, active_domain)
     elif tab == "purchases":
-        content = render_purchases(branch, start_date, end_date)
+        if is_pharmacy:
+            content = render_purchases(branch, start_date, end_date)
+        else:
+            content = render_domain_tab("costs", sales_df, purchase_df, _kpi_data_for_domain, active_domain)
     elif tab == "compare":
-        content = render_compare(start_date, end_date)
+        if is_pharmacy:
+            content = render_compare(start_date, end_date)
+        else:
+            content = render_domain_tab("customers", sales_df, purchase_df, _kpi_data_for_domain, active_domain)
+    # Domain-only tabs (non-pharmacy)
+    elif tab == "cashflow":
+        content = render_domain_tab("cashflow", sales_df, purchase_df, _kpi_data_for_domain, active_domain)
+    elif tab == "inventory":
+        content = render_domain_tab("inventory", sales_df, purchase_df, _kpi_data_for_domain, active_domain)
 
     # ── Phase 1 new tabs ──────────────────────────────────────────
     elif tab == "yoy":
@@ -786,13 +1250,35 @@ def render_tab(tab, branch, start_date, end_date, _version):
     elif tab == "users":
         content = render_users_tab()
     elif tab == "tenants":
-        content = render_tenants_tab()
+        content = render_tenants_tab(local_tenants=_list_tenants_local())
     elif tab == "billing":
         content = _render_billing_tab()
     else:
         content = html.Div()
 
-    return content, b_opts, sources, status, plabel
+    # ── Domain badge for sidebar ──────────────────────────────────
+    try:
+        _dom_cfg   = get_domain_config(active_domain)
+        _dom_color = {"pharmacy": "#1e7e4b", "saas": "#0d6efd", "retail": "#fd7e14",
+                      "accounting": "#6f42c1", "generic": "#6b7280"}.get(active_domain, "#6b7280")
+        domain_badge = html.Div([
+            html.Div("Business Type", className="sidebar-label"),
+            html.Span(
+                f"{_dom_cfg['icon']} {_dom_cfg['label']}",
+                style={
+                    "background": _dom_color, "color": "white",
+                    "padding": "3px 10px", "borderRadius": "10px",
+                    "fontSize": "0.72rem", "fontWeight": "600",
+                    "display": "inline-block", "marginTop": "4px",
+                },
+            ),
+        ]) if active_domain != "pharmacy" else html.Div()
+    except Exception:
+        domain_badge = html.Div()
+
+    # Hide pharmacy Sales/Purchase export buttons for tenant users (MedStar data only)
+    _exp_style = {"display":"none"} if is_tenant else {"display":"grid","gridTemplateColumns":"1fr 1fr","gap":"4px","marginBottom":"4px"}
+    return content, b_opts, sources, status, plabel, domain_badge, _exp_style
 
 # ══════════════════════════════════════════════════════════════
 # TAB 1 — OVERVIEW
@@ -1076,50 +1562,105 @@ def render_compare(start_date, end_date):
 # TAB 5 — UPLOAD DATA  (Admin only)
 # ══════════════════════════════════════════════════════════════
 def render_upload_tab():
-    hist = get_upload_history(engine)
+    # Determine caller's domain to adapt UI wording
+    try:
+        _is_tenant = current_user.is_authenticated and current_user.is_tenant_user()
+        _domain    = getattr(current_user, "tenant_domain", "pharmacy") if _is_tenant else "pharmacy"
+        _tid_upload = int(current_user.tenant_id) if _is_tenant and current_user.tenant_id else None
+    except Exception:
+        _domain    = "pharmacy"
+        _tid_upload = None
+
+    _is_pharmacy = (_domain == "pharmacy")
+
+    # Domain-specific copy
+    if _is_pharmacy:
+        _banner     = "Upload Sales or Purchase reports from your POS system. App auto-detects report type."
+        _step1_title = "Step 1 — Drop your Excel file"
+        _file_types  = ".xlsx,.xls"
+        _file_hint   = "Supports: .xlsx  .xls  (POS export format)"
+        _branch_lbl  = "Branch / Location Name"
+        _branch_ph   = "e.g. Keelkattalai"
+    else:
+        _banner     = ("Upload any CSV or Excel file with your business data. "
+                       "InsightHub auto-detects your column headers and classifies revenue vs cost data.")
+        _step1_title = "Step 1 — Drop your data file"
+        _file_types  = ".xlsx,.xls,.csv"
+        _file_hint   = "Supports: .xlsx  .xls  .csv  (QuickBooks, Tally, and standard exports)"
+        _branch_lbl  = "Division / Region / Product"
+        _branch_ph   = "e.g. APAC, Enterprise, SaaS"
+
+    # Fetch upload history scoped to this tenant
+    hist = get_upload_history(engine, tenant_id=_tid_upload)
     hist_cols = [{"name":"File","id":"filename"},{"name":"Type","id":"report_type"},
-                 {"name":"Branch","id":"branch"},{"name":"Month","id":"month_label"},
+                 {"name":"Division / Branch","id":"branch"},{"name":"Period","id":"month_label"},
                  {"name":"Rows","id":"row_count"},{"name":"Uploaded At","id":"uploaded_at"},
                  {"name":"Duplicate?","id":"duplicate_warning"}]
     hist_data = hist.to_dict("records") if not hist.empty else []
+
     return html.Div([
-        html.Div([html.Span(className="accent"),html.Span("Upload New Data")],className="section-heading"),
-        html.Div(["Upload Sales or Purchase reports from POS. App auto-detects report type."],className="info-banner"),
-        html.Div(className="chart-card",children=[
-            html.Div("Step 1 -- Drop your Excel file",className="chart-card-title"),
-            dcc.Upload(id="upload-file",accept=".xlsx,.xls",multiple=False,
-                children=html.Div([html.Div("\U0001f4c2",style={"fontSize":"2.5rem","marginBottom":"0.3rem"}),
-                    html.Div("Drag and Drop or Click to Browse",style={"fontWeight":600}),
-                    html.Div("Supports: .xlsx  .xls",style={"fontSize":"0.72rem","color":"#aaa","marginTop":"0.4rem"})]),
-                className="upload-area"),
-            html.Div(id="upload-detect-result",style={"marginTop":"0.8rem"}),
+        html.Div([html.Span(className="accent"), html.Span("Upload New Data")],
+                 className="section-heading"),
+        html.Div(_banner, className="info-banner"),
+
+        html.Div(className="chart-card", children=[
+            html.Div(_step1_title, className="chart-card-title"),
+            dcc.Upload(
+                id="upload-file", accept=_file_types, multiple=False,
+                children=html.Div([
+                    html.Div("📂", style={"fontSize":"2.5rem","marginBottom":"0.3rem"}),
+                    html.Div("Drag and Drop or Click to Browse", style={"fontWeight":600}),
+                    html.Div(_file_hint,
+                             style={"fontSize":"0.72rem","color":"#aaa","marginTop":"0.4rem"}),
+                ]),
+                className="upload-area",
+            ),
+            html.Div(id="upload-detect-result", style={"marginTop":"0.8rem"}),
         ]),
-        html.Div(id="upload-config-card",style={"display":"none"},children=[
-            html.Div(className="chart-card",children=[
-                html.Div("Step 2 -- Confirm details and Load",className="chart-card-title"),
+
+        html.Div(id="upload-config-card", style={"display":"none"}, children=[
+            html.Div(className="chart-card", children=[
+                html.Div("Step 2 — Confirm details and Load", className="chart-card-title"),
                 dbc.Row([
-                    dbc.Col([html.Div("Detected Type",className="sidebar-label"),html.Div(id="upload-type-badge")],md=3),
-                    dbc.Col([html.Div("Branch Name",className="sidebar-label"),
-                             dbc.Input(id="upload-branch",placeholder="e.g. Keelkattalai",debounce=True,style={"fontSize":"0.85rem"})],md=3),
-                    dbc.Col([html.Div("Month and Year",className="sidebar-label"),
-                             dbc.Input(id="upload-month",placeholder="e.g. Apr 2026",debounce=True,style={"fontSize":"0.85rem"})],md=3),
-                    dbc.Col([html.Div(" ",className="sidebar-label"),
-                             dbc.Button("Load into Dashboard",id="upload-confirm-btn",color="success",className="w-100",disabled=True,style={"fontWeight":600})],md=3),
-                ],className="g-3 mb-3"),
+                    dbc.Col([html.Div("Detected Type", className="sidebar-label"),
+                             html.Div(id="upload-type-badge")], md=3),
+                    dbc.Col([html.Div(_branch_lbl, className="sidebar-label"),
+                             dbc.Input(id="upload-branch", placeholder=_branch_ph,
+                                       debounce=True, style={"fontSize":"0.85rem"})], md=3),
+                    dbc.Col([html.Div("Period (Month / Quarter / Year)", className="sidebar-label"),
+                             dbc.Input(id="upload-month", placeholder="e.g. Apr 2026 or Q1 2026",
+                                       debounce=True, style={"fontSize":"0.85rem"})], md=3),
+                    dbc.Col([html.Div(" ", className="sidebar-label"),
+                             dbc.Button("Load into Dashboard", id="upload-confirm-btn",
+                                        color="success", className="w-100", disabled=True,
+                                        style={"fontWeight":600})], md=3),
+                ], className="g-3 mb-3"),
                 html.Div(id="upload-preview-container"),
             ]),
         ]),
-        html.Div(id="upload-status-msg",style={"marginBottom":"0.8rem"}),
-        html.Div(className="chart-card",children=[
-            html.Div("Upload History",className="chart-card-title"),
-            html.Div(id="upload-history-container",children=[
-                dash_table.DataTable(id="upload-history-table",columns=hist_cols,data=hist_data,
-                    page_size=10,style_table={"overflowX":"auto"},
+
+        html.Div(id="upload-status-msg", style={"marginBottom":"0.8rem"}),
+
+        html.Div(className="chart-card", children=[
+            html.Div([
+                html.Div("Upload History", className="chart-card-title",
+                         style={"display":"inline-block"}),
+                dbc.Button("🧹 Remove Duplicate Uploads", id="fix-duplicates-btn",
+                           color="warning", size="sm", outline=True,
+                           style={"fontSize":"0.78rem","fontWeight":600,"float":"right",
+                                  "marginTop":"-4px"}),
+            ], style={"overflow":"hidden","marginBottom":"0.5rem"}),
+            html.Div(id="fix-duplicates-feedback"),
+            html.Div(id="upload-history-container", children=[
+                dash_table.DataTable(
+                    id="upload-history-table", columns=hist_cols, data=hist_data,
+                    page_size=10, style_table={"overflowX":"auto"},
                     style_cell={"fontSize":"0.78rem","padding":"6px 10px","textAlign":"left"},
                     style_header={"backgroundColor":"#f0f8f4","fontWeight":"bold","color":C_GREEN},
                     style_data_conditional=[{"if":{"filter_query":"{duplicate_warning} = 1"},
-                        "backgroundColor":"#fff3cd","color":"#856404"}]
-                ) if hist_data else html.Div("No uploads yet.",style={"color":"#888","fontSize":"0.85rem"}),
+                        "backgroundColor":"#fff3cd","color":"#856404"}],
+                ) if hist_data else html.Div("No uploads yet.",
+                                             style={"color":"#888","fontSize":"0.85rem"}),
             ]),
         ]),
     ])
@@ -1128,7 +1669,24 @@ def render_upload_tab():
 # TAB 6 — USER MANAGEMENT  (Admin only)
 # ══════════════════════════════════════════════════════════════
 def render_users_tab():
-    users = list_users()
+    # Determine if the caller is a tenant admin — scope the list accordingly
+    try:
+        _caller_is_tenant = current_user.is_authenticated and current_user.is_tenant_user()
+        _caller_tid       = int(current_user.tenant_id) if _caller_is_tenant and current_user.tenant_id else None
+        _caller_tname     = current_user.tenant_name    if _caller_is_tenant else None
+    except Exception:
+        _caller_is_tenant = False
+        _caller_tid       = None
+        _caller_tname     = None
+
+    # Fetch only the relevant users:
+    #   - internal admin → all internal (no tenant) users  [tenant_id=None]
+    #   - tenant admin   → only their own tenant's users   [tenant_id=N]
+    if _caller_is_tenant and _caller_tid:
+        users = list_users(tenant_id=_caller_tid)
+    else:
+        users = list_users()          # internal users only (default)
+
     user_rows = users.to_dict("records") if not users.empty else []
     user_cols = [
         {"name":"ID",           "id":"id"},
@@ -1140,23 +1698,50 @@ def render_users_tab():
         {"name":"Created",      "id":"created_at"},
     ]
 
-    # Fetch tenants from FastAPI for the tenant dropdown
-    _, tenants_resp = call_api("GET", "/tenants")
-    tenant_options = [{"label": "— None —", "value": ""}]
-    if isinstance(tenants_resp, list):
-        tenant_options += [
-            {"label": t.get("name", ""), "value": f"{t.get('id','')}|{t.get('name','')}"}
-            for t in tenants_resp
-        ]
+    # Build the tenant assignment dropdown (internal admins only)
+    if not _caller_is_tenant:
+        _, tenants_resp = call_api("GET", "/tenants")
+        tenant_options = [{"label": "— None —", "value": ""}]
+        if isinstance(tenants_resp, list):
+            tenant_options += [
+                {"label": t.get("name", ""), "value": f"{t.get('id','')}|{t.get('name','')}"}
+                for t in tenants_resp
+            ]
+        tenant_col = dbc.Col([
+            html.Div("Assign Tenant", className="sidebar-label"),
+            dcc.Dropdown(id="new-tenant", options=tenant_options,
+                         value="", clearable=True, placeholder="— None —",
+                         style={"fontSize":"0.85rem"}),
+        ], md=2)
+    else:
+        # Tenant admins: pre-assign to their own tenant (hidden, value carried in a Store)
+        tenant_col = dbc.Col([
+            html.Div("Tenant", className="sidebar-label"),
+            html.Div(
+                _caller_tname or "Your Tenant",
+                style={"fontSize":"0.85rem","padding":"6px 10px",
+                       "background":"#f0f8f4","borderRadius":"6px",
+                       "border":"1px solid #c8e6c9","color":C_GREEN,"fontWeight":600},
+            ),
+            # Hidden dropdown so the callback still has an id="new-tenant" to read
+            dcc.Dropdown(id="new-tenant",
+                         options=[{"label": _caller_tname or "", "value": f"{_caller_tid}|{_caller_tname or ''}"}],
+                         value=f"{_caller_tid}|{_caller_tname or ''}",
+                         clearable=False, style={"display":"none"}),
+        ], md=2)
+
+    title_suffix = f" — {_caller_tname}" if _caller_is_tenant else ""
 
     return html.Div([
-        html.Div([html.Span(className="accent"),html.Span("User Management")],className="section-heading"),
-        html.Div("\U0001f6e1️  Only Admins can access this page. Viewer accounts cannot upload data or manage users.",
+        html.Div([html.Span(className="accent"),
+                  html.Span(f"User Management{title_suffix}")],
+                 className="section-heading"),
+        html.Div("🛡️  Only Admins can access this page. Viewer accounts cannot upload data or manage users.",
                  className="info-banner"),
 
-        # Existing users table
-        html.Div(className="chart-card",children=[
-            html.Div("Active Users",className="chart-card-title"),
+        # Users table
+        html.Div(className="chart-card", children=[
+            html.Div("Active Users", className="chart-card-title"),
             dash_table.DataTable(
                 id="users-table",
                 columns=user_cols, data=user_rows,
@@ -1173,45 +1758,45 @@ def render_users_tab():
                 row_selectable="single",
                 selected_rows=[],
             ),
-            html.Div(id="user-action-result",style={"marginTop":"0.6rem"}),
+            html.Div(id="user-action-result", style={"marginTop":"0.6rem"}),
             html.Hr(style={"borderColor":"#e2e8f0","margin":"0.8rem 0"}),
             html.Div("Selected user actions:", className="sidebar-label",
                      style={"marginBottom":"0.4rem"}),
             dbc.Row([
-                dbc.Col(dbc.Button("Toggle Role (Admin⇔Viewer)",id="btn-toggle-role",
-                                   color="warning",size="sm",outline=True), md=3),
-                dbc.Col(dbc.Button("Deactivate User",id="btn-deactivate",
-                                   color="danger",size="sm",outline=True), md=2),
-                dbc.Col(dbc.Button("Reactivate User",id="btn-reactivate",
-                                   color="success",size="sm",outline=True), md=2),
-            ],className="g-2"),
+                dbc.Col(dbc.Button("Toggle Role (Admin⇔Viewer)", id="btn-toggle-role",
+                                   color="warning", size="sm", outline=True), md=3),
+                dbc.Col(dbc.Button("Deactivate User", id="btn-deactivate",
+                                   color="danger", size="sm", outline=True), md=2),
+                dbc.Col(dbc.Button("Reactivate User", id="btn-reactivate",
+                                   color="success", size="sm", outline=True), md=2),
+            ], className="g-2"),
         ]),
 
         # Add new user
-        html.Div(className="chart-card",style={"marginTop":"1rem"},children=[
-            html.Div("Add New User",className="chart-card-title"),
+        html.Div(className="chart-card", style={"marginTop":"1rem"}, children=[
+            html.Div("Add New User", className="chart-card-title"),
             dbc.Row([
-                dbc.Col([html.Div("Username",className="sidebar-label"),
-                         dbc.Input(id="new-username",placeholder="username",debounce=True,style={"fontSize":"0.85rem"})],md=2),
-                dbc.Col([html.Div("Display Name",className="sidebar-label"),
-                         dbc.Input(id="new-display",placeholder="Full Name",debounce=True,style={"fontSize":"0.85rem"})],md=2),
-                dbc.Col([html.Div("Password",className="sidebar-label"),
-                         dbc.Input(id="new-password",placeholder="password",type="password",debounce=True,style={"fontSize":"0.85rem"})],md=2),
-                dbc.Col([html.Div("Role",className="sidebar-label"),
+                dbc.Col([html.Div("Username",     className="sidebar-label"),
+                         dbc.Input(id="new-username", placeholder="username",
+                                   debounce=True, style={"fontSize":"0.85rem"})], md=2),
+                dbc.Col([html.Div("Display Name", className="sidebar-label"),
+                         dbc.Input(id="new-display", placeholder="Full Name",
+                                   debounce=True, style={"fontSize":"0.85rem"})], md=2),
+                dbc.Col([html.Div("Password",     className="sidebar-label"),
+                         dbc.Input(id="new-password", placeholder="password",
+                                   type="password", debounce=True,
+                                   style={"fontSize":"0.85rem"})], md=2),
+                dbc.Col([html.Div("Role",         className="sidebar-label"),
                          dcc.Dropdown(id="new-role",
                              options=[{"label":"Admin","value":"admin"},
                                       {"label":"Viewer","value":"viewer"}],
-                             value="viewer",clearable=False,style={"fontSize":"0.85rem"})],md=2),
-                dbc.Col([html.Div("Assign Tenant",className="sidebar-label"),
-                         dcc.Dropdown(id="new-tenant",
-                             options=tenant_options,
-                             value="",clearable=True,
-                             placeholder="— None —",
-                             style={"fontSize":"0.85rem"})],md=2),
-                dbc.Col([html.Div(" ",className="sidebar-label"),
-                         dbc.Button("Add User",id="btn-add-user",color="success",
-                                    style={"width":"100%","fontWeight":600})],md=2),
-            ],className="g-3 mb-2"),
+                             value="viewer", clearable=False,
+                             style={"fontSize":"0.85rem"})], md=2),
+                tenant_col,
+                dbc.Col([html.Div(" ", className="sidebar-label"),
+                         dbc.Button("Add User", id="btn-add-user", color="success",
+                                    style={"width":"100%","fontWeight":600})], md=2),
+            ], className="g-3 mb-2"),
             html.Div(id="add-user-result"),
         ]),
     ])
@@ -1257,7 +1842,14 @@ def user_row_action(n_toggle, n_deact, n_react, selected, data):
     else:
         return no_update, no_update
 
-    fresh = list_users().to_dict("records")
+    # Refresh the table scoped to the caller's tenant
+    try:
+        _rtid = (int(current_user.tenant_id)
+                 if current_user.is_authenticated and current_user.is_tenant_user()
+                 and current_user.tenant_id else None)
+    except Exception:
+        _rtid = None
+    fresh = list_users(tenant_id=_rtid).to_dict("records")
     return dbc.Alert(msg, color=color, duration=4000), fresh
 
 
@@ -1283,11 +1875,31 @@ def add_new_user(_, username, display, password, role, tenant_val):
             try: tenant_id = int(parts[0])
             except ValueError: pass
             tenant_name = parts[1]
+    # Tenant admins can only create users for their own tenant — enforce it
+    try:
+        if current_user.is_authenticated and current_user.is_tenant_user():
+            tenant_id   = int(current_user.tenant_id) if current_user.tenant_id else tenant_id
+            tenant_name = current_user.tenant_name    or tenant_name
+            # Also inherit domain from the caller's profile
+            _tdom = getattr(current_user, "tenant_domain", "pharmacy")
+        else:
+            _tdom = "pharmacy"
+    except Exception:
+        _tdom = "pharmacy"
+
     err = create_user(username.strip(), password, role or "viewer", display or "",
-                      tenant_id=tenant_id, tenant_name=tenant_name)
+                      tenant_id=tenant_id, tenant_name=tenant_name,
+                      tenant_domain=_tdom)
     if err:
         return dbc.Alert("Error: {}".format(err), color="danger", duration=5000), no_update
-    fresh = list_users().to_dict("records")
+    # Refresh scoped to caller's tenant
+    try:
+        _rtid = (int(current_user.tenant_id)
+                 if current_user.is_authenticated and current_user.is_tenant_user()
+                 and current_user.tenant_id else None)
+    except Exception:
+        _rtid = None
+    fresh = list_users(tenant_id=_rtid).to_dict("records")
     tenant_label = f" → Tenant: {tenant_name}" if tenant_name else ""
     return dbc.Alert(
         "User '{}' created as {}{}.".format(username.strip(), role, tenant_label),
@@ -1315,25 +1927,25 @@ def _filt_p(branch, sd, ed):
     State("filter-branch","value"),State("filter-date","start_date"),State("filter-date","end_date"),
     prevent_initial_call=True)
 def dl_s_csv(_,b,sd,ed):
-    return dcc.send_data_frame(_filt_s(b,sd,ed).to_csv,"medstar_sales.csv",index=False)
+    return dcc.send_data_frame(_filt_s(b,sd,ed).to_csv,"sales_export.csv",index=False)
 
 @app.callback(Output("dl-sales-xlsx","data"),Input("btn-dl-sales-xlsx","n_clicks"),
     State("filter-branch","value"),State("filter-date","start_date"),State("filter-date","end_date"),
     prevent_initial_call=True)
 def dl_s_xlsx(_,b,sd,ed):
-    return dcc.send_data_frame(_filt_s(b,sd,ed).to_excel,"medstar_sales.xlsx",index=False,sheet_name="Sales")
+    return dcc.send_data_frame(_filt_s(b,sd,ed).to_excel,"sales_export.xlsx",index=False,sheet_name="Sales")
 
 @app.callback(Output("dl-purch-csv","data"),Input("btn-dl-purch-csv","n_clicks"),
     State("filter-branch","value"),State("filter-date","start_date"),State("filter-date","end_date"),
     prevent_initial_call=True)
 def dl_p_csv(_,b,sd,ed):
-    return dcc.send_data_frame(_filt_p(b,sd,ed).to_csv,"medstar_purchases.csv",index=False)
+    return dcc.send_data_frame(_filt_p(b,sd,ed).to_csv,"purchases_export.csv",index=False)
 
 @app.callback(Output("dl-purch-xlsx","data"),Input("btn-dl-purch-xlsx","n_clicks"),
     State("filter-branch","value"),State("filter-date","start_date"),State("filter-date","end_date"),
     prevent_initial_call=True)
 def dl_p_xlsx(_,b,sd,ed):
-    return dcc.send_data_frame(_filt_p(b,sd,ed).to_excel,"medstar_purchases.xlsx",index=False,sheet_name="Purchases")
+    return dcc.send_data_frame(_filt_p(b,sd,ed).to_excel,"purchases_export.xlsx",index=False,sheet_name="Purchases")
 
 @app.callback(Output("dl-pdf","data"),Input("btn-dl-pdf","n_clicks"),
     State("filter-branch","value"),State("filter-date","start_date"),State("filter-date","end_date"),
@@ -1343,7 +1955,7 @@ def dl_pdf(_,branch,sd,ed):
     if branch!="All": s=s[s["branch"]==branch]; p=p[p["branch"]==branch]
     s=apply_date_filter(s,sd,ed,"bill_date"); p=apply_date_filter(p,sd,ed,"grn_date")
     pdf_bytes = generate_pdf(s,p,sd,ed,branch,fmt_inr)
-    return dcc.send_bytes(pdf_bytes,"medstar_report_{}.pdf".format(date.today().strftime("%Y%m%d")))
+    return dcc.send_bytes(pdf_bytes,"insighthub_report_{}.pdf".format(date.today().strftime("%Y%m%d")))
 
 # ══════════════════════════════════════════════════════════════
 # UPLOAD CALLBACKS
@@ -1358,15 +1970,40 @@ def dl_pdf(_,branch,sd,ed):
     prevent_initial_call=True,
 )
 def handle_file_drop(contents, filename):
-    if not contents: return no_update,{"display":"none"},no_update,no_update
-    df_raw,rtype,err = parse_upload(contents,filename)
-    if err: return dbc.Alert("Error: {}".format(err),color="danger",dismissable=True),{"display":"none"},no_update,no_update
-    bl = "Sales Report" if rtype=="sales" else "Purchase Report"
-    bc = "success" if rtype=="sales" else "primary"
-    result = dbc.Alert([html.Strong("Detected: {}  ".format(bl)),dbc.Badge(filename,color="secondary")],
-                       color="success",style={"fontSize":"0.85rem","padding":"0.5rem 1rem"})
-    return result,{"display":"block"},dbc.Badge(bl,color=bc,style={"fontSize":"0.85rem","padding":"0.4rem 0.8rem"}),\
-           {"report_type":rtype,"filename":filename,"df_raw_json":df_raw.to_json()}
+    if not contents:
+        return no_update, {"display":"none"}, no_update, no_update
+
+    # Pass the tenant's domain so generic detection kicks in for non-pharmacy
+    try:
+        _drop_domain = (getattr(current_user, "tenant_domain", "pharmacy")
+                        if current_user.is_authenticated and current_user.is_tenant_user()
+                        else "pharmacy")
+    except Exception:
+        _drop_domain = "pharmacy"
+
+    df_raw, rtype, err = parse_upload(contents, filename, domain=_drop_domain)
+    if err:
+        return (dbc.Alert("Error: {}".format(err), color="danger", dismissable=True),
+                {"display":"none"}, no_update, no_update)
+
+    # Human-readable type labels
+    _type_labels = {
+        "sales":             "Sales Report (POS)",
+        "purchase":          "Purchase / GRN Report",
+        "generic_sales":     "Revenue / Sales Data",
+        "generic_purchases": "Cost / Expense Data",
+    }
+    bl = _type_labels.get(rtype, rtype.replace("_", " ").title())
+    bc = "success" if "sales" in rtype else "primary"
+
+    result = dbc.Alert(
+        [html.Strong("✅ Detected: {}  ".format(bl)),
+         dbc.Badge(filename, color="secondary")],
+        color="success", style={"fontSize":"0.85rem","padding":"0.5rem 1rem"},
+    )
+    return (result, {"display":"block"},
+            dbc.Badge(bl, color=bc, style={"fontSize":"0.85rem","padding":"0.4rem 0.8rem"}),
+            {"report_type": rtype, "filename": filename, "df_raw_json": df_raw.to_json()})
 
 @app.callback(
     Output("upload-preview-container","children"),
@@ -1380,8 +2017,11 @@ def update_preview(branch,month,raw_store):
     if not raw_store or not branch or not month: return no_update,no_update,True
     try:
         df_raw = pd.read_json(io.StringIO(raw_store["df_raw_json"]))
-        df_raw.columns = range(len(df_raw.columns))
-        sd = build_preview(df_raw,raw_store["report_type"],branch.strip(),month.strip())
+        _rtype = raw_store["report_type"]
+        # Pharmacy POS reports use numeric column indices; generic reports keep named headers
+        if _rtype in ("sales", "purchase"):
+            df_raw.columns = range(len(df_raw.columns))
+        sd = build_preview(df_raw, _rtype, branch.strip(), month.strip())
         sd["filename"] = raw_store["filename"]
         preview = html.Div([
             html.Div("Preview -- first 5 rows of {} total:".format(sd["row_count"]),
@@ -1411,7 +2051,14 @@ def confirm_upload(n,store_data,version):
     global sales_df,purchase_df
     if not store_data:
         return no_update,dbc.Alert("Nothing to upload.",color="warning"),no_update,no_update,no_update,no_update,no_update
-    row_count,duplicate,error = append_upload_to_db(store_data,engine)
+    # Tag the upload with the uploader's tenant_id (None for internal admins)
+    try:
+        _upload_tid = (int(current_user.tenant_id)
+                       if current_user.is_authenticated and current_user.is_tenant_user()
+                       and current_user.tenant_id else None)
+    except Exception:
+        _upload_tid = None
+    row_count,duplicate,error = append_upload_to_db(store_data, engine, tenant_id=_upload_tid)
     if error:
         return no_update,dbc.Alert("Upload failed: {}".format(error),color="danger",dismissable=True),no_update,no_update,no_update,no_update,no_update
     sales_df,purchase_df = load_from_db(engine)
@@ -1505,36 +2152,58 @@ def create_tenant(n, name, slug, domain, plan, email):
     if not name or not slug:
         return dbc.Alert("Name and Slug are required.", color="warning", dismissable=True), no_update
 
+    _name   = name.strip()
+    _slug   = slug.strip().lower().replace(" ", "-")
+    _domain = domain or "pharmacy"
+    _plan   = plan or "basic"
+    _email  = email or ""
+
+    # Try FastAPI first
     status, data = call_api("POST", "/tenants", json_body={
-        "name":          name.strip(),
-        "slug":          slug.strip().lower(),
-        "domain_type":   domain or "pharmacy",
-        "plan":          plan or "basic",
-        "contact_email": email or "",
+        "name":          _name,
+        "slug":          _slug,
+        "domain_type":   _domain,
+        "plan":          _plan,
+        "contact_email": _email,
     })
 
     if status == 201:
-        msg = dbc.Alert(f"Tenant '{name}' created successfully.", color="success", dismissable=True)
+        msg = dbc.Alert(f"✅ Tenant '{_name}' created successfully.", color="success", dismissable=True)
+        _, tenants = call_api("GET", "/tenants")
+        rows = [
+            {
+                "id":      t.get("id", ""),
+                "Name":    t.get("name", ""),
+                "Slug":    t.get("slug", ""),
+                "Domain":  t.get("domain_type", "").capitalize(),
+                "Plan":    t.get("plan", "").capitalize(),
+                "Status":  "Active" if t.get("is_active") else "Inactive",
+                "Contact": t.get("contact_email", ""),
+                "Created": (t.get("created_at", "") or "")[:10],
+            }
+            for t in (tenants if isinstance(tenants, list) else [])
+        ]
+        return msg, rows
+
+    elif status == 503:
+        # FastAPI offline — save directly to local SQLite
+        ok, message = _create_tenant_local(_name, _slug, _domain, _plan, _email)
+        if ok:
+            rows = _list_tenants_local()
+            msg  = dbc.Alert(
+                [html.Strong("✅ Tenant saved locally. "),
+                 html.Span(f"'{_name}' ({_domain}) added to local database. "
+                           "Start the FastAPI service (uvicorn api.main:app --port 8000) "
+                           "to sync to the cloud database.")],
+                color="success", dismissable=True,
+            )
+            return msg, rows
+        else:
+            return dbc.Alert(f"❌ Local save failed: {message}", color="danger", dismissable=True), no_update
+
     else:
         detail = data.get("detail", "Unknown error") if isinstance(data, dict) else str(data)
-        return dbc.Alert(f"Error: {detail}", color="danger", dismissable=True), no_update
-
-    # Refresh table
-    _, tenants = call_api("GET", "/tenants")
-    rows = [
-        {
-            "id":      t.get("id", ""),
-            "Name":    t.get("name", ""),
-            "Slug":    t.get("slug", ""),
-            "Domain":  t.get("domain_type", "").capitalize(),
-            "Plan":    t.get("plan", "").capitalize(),
-            "Status":  "Active" if t.get("is_active") else "Inactive",
-            "Contact": t.get("contact_email", ""),
-            "Created": (t.get("created_at", "") or "")[:10],
-        }
-        for t in (tenants if isinstance(tenants, list) else [])
-    ]
-    return msg, rows
+        return dbc.Alert(f"❌ Error: {detail}", color="danger", dismissable=True), no_update
 
 
 # ── Deactivate selected tenant ─────────────────────────────────
@@ -1740,7 +2409,7 @@ def _render_billing_tab() -> html.Div:
         html.Div([
             html.Span("💡 ", style={"fontSize":"1rem"}),
             html.Span("Need a custom plan for your chain or franchise? ",
-                      style={"fontSize":"0.82rem","color":"#374151"}),
+                                   style={"fontSize":"0.82rem","color":"#374151"}),
             html.A("Contact us", href="mailto:sales@insighthub.ai",
                    style={"fontSize":"0.82rem","color":C_BLUE,"fontWeight":600}),
         ], style={"background":"#f0f9ff","borderRadius":"8px","padding":"0.75rem 1rem",
@@ -1755,6 +2424,7 @@ def _render_billing_tab() -> html.Div:
     Output("ai-chat-messages", "children"),
     Output("ai-chat-history",  "data"),
     Output("ai-chat-input",    "value"),
+    Output("ai-agent-trace",   "children"),
     Input("ai-chat-send",      "n_clicks"),
     Input({"type":"ai-suggest-btn","idx":dash.ALL}, "n_clicks"),
     State("ai-chat-input",    "value"),
@@ -1768,14 +2438,27 @@ def handle_ai_chat(n_send, suggest_clicks, user_input, history, language, kpi_ct
     text      = user_input or ""
 
     if isinstance(triggered, dict) and triggered.get("type") == "ai-suggest-btn":
-        suggested = [
-            "How did we perform last month?",
-            "Which branch had the highest margin?",
-            "Are there any anomalies in our sales data?",
-            "What are our top suppliers by purchase value?",
-            "What's our average cash vs credit ratio?",
-            "Compare this year vs last year sales",
-        ]
+        try:
+            tid_int = int(current_user.id) if current_user.is_authenticated else 0
+            dom     = _get_active_domain(tid_int)
+            from domain_config import get_domain_config
+            suggested = get_domain_config(dom).get("suggested_questions", [
+                "How did we perform last month?",
+                "Which branch had the highest margin?",
+                "Are there any anomalies in our sales data?",
+                "What are our top suppliers by purchase value?",
+                "What's our average cash vs credit ratio?",
+                "Compare this year vs last year sales",
+            ])
+        except Exception:
+            suggested = [
+                "How did we perform last month?",
+                "Which branch had the highest margin?",
+                "Are there any anomalies in our sales data?",
+                "What are our top suppliers by purchase value?",
+                "What's our average cash vs credit ratio?",
+                "Compare this year vs last year sales",
+            ]
         idx  = triggered.get("idx", 0)
         text = suggested[idx] if idx < len(suggested) else text
 
@@ -1787,7 +2470,6 @@ def handle_ai_chat(n_send, suggest_clicks, user_input, history, language, kpi_ct
     except Exception:
         tid = None
 
-    # Reconstruct existing chat UI
     existing_messages = []
     for turn in (history or []):
         if turn["role"] == "user":
@@ -1797,29 +2479,38 @@ def handle_ai_chat(n_send, suggest_clicks, user_input, history, language, kpi_ct
     existing_messages.append(render_user_message(text))
 
     kpi_data = kpi_ctx or {}
+    trace_cards = []
     try:
-        answer, new_history = rag_answer(
+        answer, new_history, trace_cards = rag_answer(
             question=text,
             tenant_id=tid or 0,
             kpi_data=kpi_data,
             history=history or [],
-            language=language or "English",
         )
-    except Exception as exc:
-        answer      = f"Sorry, I encountered an error: {exc}"
+    except Exception as _e:
+        answer      = f"AI error: {_e}"
         new_history = (history or []) + [
-            {"role":"user","content":text},
-            {"role":"assistant","content":answer},
+            {"role": "user",      "content": text},
+                  {"role": "assistant", "content": answer},
         ]
 
     existing_messages.append(render_assistant_message(answer))
-    return existing_messages, new_history, ""
+
+    trace_section = []
+    if trace_cards:
+        trace_section = [
+            html.Div("Agent Reasoning Trace", className="sidebar-label",
+                     style={"marginTop":"1rem","marginBottom":"0.4rem"}),
+            *trace_cards,
+        ]
+
+    return existing_messages, new_history, "", trace_section
 
 
 @app.callback(
-    Output("ai-chat-messages", "children", allow_duplicate=True),
-    Output("ai-chat-history",  "data",     allow_duplicate=True),
-    Input("ai-chat-clear",     "n_clicks"),
+    Output("ai-chat-history", "data",     allow_duplicate=True),
+    Output("ai-chat-display", "children", allow_duplicate=True),
+    Input("ai-chat-clear",    "n_clicks"),
     prevent_initial_call=True,
 )
 def clear_ai_chat(_n):
@@ -1848,16 +2539,62 @@ def run_anomaly_detection(_n):
                  else "InsightHub")
         anomalies = get_anomaly_report(sales_df, tenant_id=0, tenant_name=tname)
         return render_anomaly_results(anomalies)
-    except Exception as exc:
-        return dbc.Alert(f"Anomaly detection error: {exc}", color="danger",
-                         style={"fontSize":"0.82rem","marginTop":"0.5rem"})
+    except Exception:
+        return html.Div()
 
 
-# ══════════════════════════════════════════════════════════════
-# UPLOAD ROLLBACK CALLBACK
-# ══════════════════════════════════════════════════════════════
 @app.callback(
-    Output("rollback-feedback",  "children"),
+    Output("fix-duplicates-feedback",  "children"),
+    Output("upload-history-container", "children", allow_duplicate=True),
+    Input("fix-duplicates-btn", "n_clicks"),
+    prevent_initial_call=True,
+)
+def handle_fix_duplicates(n_clicks):
+    if not n_clicks:
+        raise dash.exceptions.PreventUpdate
+    try:
+        from data_loader import cleanup_duplicate_uploads, get_upload_history
+        _tid = None
+        try:
+            if current_user.is_authenticated and current_user.is_tenant_user():
+                _tid = int(current_user.tenant_id)
+        except Exception:
+            pass
+        del_rows, del_hist, err = cleanup_duplicate_uploads(auth_engine, tenant_id=_tid)
+        if err:
+            return dbc.Alert(f"Cleanup error: {err}", color="danger", dismissable=True), dash.no_update
+        # Rebuild history table with fresh data
+        hist = get_upload_history(auth_engine, tenant_id=_tid)
+        hcols = [{"name":"File","id":"filename"},{"name":"Type","id":"report_type"},
+                 {"name":"Branch","id":"branch"},{"name":"Month","id":"month_label"},
+                 {"name":"Rows","id":"row_count"},{"name":"Uploaded At","id":"uploaded_at"},
+                 {"name":"Duplicate?","id":"duplicate_warning"}]
+        new_tbl = dash_table.DataTable(
+            id="upload-history-table", columns=hcols,
+            data=hist.to_dict("records") if not hist.empty else [],
+            page_size=10, style_table={"overflowX":"auto"},
+            style_cell={"fontSize":"0.78rem","padding":"6px 10px","textAlign":"left"},
+            style_header={"backgroundColor":"#f0f8f4","fontWeight":"bold","color":C_GREEN},
+            style_data_conditional=[{"if":{"filter_query":"{duplicate_warning} = 1"},
+                "backgroundColor":"#fff3cd","color":"#856404"}],
+        ) if not hist.empty else html.Div("No uploads yet.", style={"color":"#888","fontSize":"0.85rem"})
+        if del_hist == 0:
+            msg = dbc.Alert("\u2705 No duplicates found \u2014 your data is already clean.",
+                            color="success", dismissable=True)
+        else:
+            msg = dbc.Alert(
+                [html.Strong("\u2705 Done! "),
+                 html.Span(f"Removed {del_rows:,} duplicate data rows across "
+                           f"{del_hist} superseded upload(s).")],
+                color="success", dismissable=True,
+            )
+        return msg, new_tbl
+    except Exception as _e:
+        return dbc.Alert(f"Cleanup error: {_e}", color="danger", dismissable=True), dash.no_update
+
+
+@app.callback(
+    Output("rollback-feedback", "children"),
     Input({"type":"rollback-btn","uid":dash.ALL}, "n_clicks"),
     prevent_initial_call=True,
 )
@@ -1865,39 +2602,266 @@ def handle_rollback(n_clicks_list):
     triggered = ctx.triggered_id
     if not triggered or not any(n for n in n_clicks_list if n):
         raise dash.exceptions.PreventUpdate
-    uid = triggered.get("uid")
-    if not uid:
-        raise dash.exceptions.PreventUpdate
-    ok, msg = do_rollback(int(uid), auth_engine)
-    color   = "success" if ok else "danger"
-    return dbc.Alert(msg, color=color, dismissable=True,
-                     style={"fontSize":"0.82rem","marginBottom":"0.75rem"})
+    uid = triggered.get("uid", "")
+    try:
+        from data_loader import rollback_upload
+        msg = rollback_upload(auth_engine, uid)
+    except Exception as _e:
+        msg = f"Rollback error: {_e}"
+    return html.Div(msg, style={"color":"#1e7e4b","fontSize":"0.82rem","marginTop":"6px"})
 
-
-# ══════════════════════════════════════════════════════════════
-# YoY YEAR SELECTOR CALLBACK
-# ══════════════════════════════════════════════════════════════
+# ── Sidebar adaptive labels callback ─────────────────────────
+# filter-date start/end are also written by apply_quick_select — allow_duplicate=True
+# lets both callbacks coexist: this one sets initial range from data, quick-select overrides.
 @app.callback(
-    Output("tab-content", "children", allow_duplicate=True),
-    Input("yoy-year-select", "value"),
-    State("filter-branch",   "value"),
-    prevent_initial_call=True,
+    Output("sidebar-filter-label",      "children"),
+    Output("sidebar-logo-icon",         "children"),
+    Output("sidebar-data-status-label", "style"),
+    Output("sidebar-sources-label",     "style"),
+    Output("filter-date", "start_date", allow_duplicate=True),
+    Output("filter-date", "end_date",   allow_duplicate=True),
+    Input("data-version", "data"),
+    prevent_initial_call="initial_duplicate",
 )
-def yoy_year_change(year, branch):
-    return render_yoy_tab(sales_df, purchase_df, branch=branch or "All", curr_year=year)
+def update_sidebar_labels(_v):
+    _hide = {"display": "none"}
+    _show = {}
+    try:
+        is_tenant = current_user.is_authenticated and current_user.is_tenant_user()
+    except Exception:
+        is_tenant = False
+
+    if not is_tenant:
+        # Admin/MedStar: pharmacy icon, Branch label, full sidebar
+        dm, dx = _data_date_bounds()
+        return "Branch", "🏪", _show, _show, str(dm), str(dx)
+
+    # Tenant user: detect domain to pick right filter label
+    try:
+        _tid = int(current_user.tenant_id) if current_user.tenant_id else None
+        _domain = _get_active_domain(_tid) if _tid else "generic"
+    except Exception:
+        _domain = "generic"
+
+    _label_map = {
+        "pharmacy":             "Branch",
+        "retail":               "Location",
+        "fnb":                  "Location",
+        "manufacturing":        "Plant",
+        "finance":              "Entity",
+        "professional_services":"Client",
+        "generic":              "Filter",
+    }
+    _icon_map = {
+        "pharmacy":             "💊",
+        "retail":               "🛍️",
+        "fnb":                  "🍽️",
+        "manufacturing":        "🏭",
+        "finance":              "💼",
+        "professional_services":"💼",
+        "generic":              "📊",
+    }
+    filter_label = _label_map.get(_domain, "Filter")
+    domain_icon  = _icon_map.get(_domain, "📊")
+
+    # Get actual date range from tenant's data
+    try:
+        _all_s, _all_p = load_tenant_df(engine, _tid)
+        _dates = []
+        for _df in (_all_s, _all_p):
+            if not _df.empty and "bill_date" in _df.columns:
+                _valid = pd.to_datetime(_df["bill_date"], errors="coerce").dropna()
+                if not _valid.empty:
+                    _dates += [_valid.min(), _valid.max()]
+        if _dates:
+            _start = min(_dates).date()
+            _end   = max(_dates).date()
+        else:
+            _today = date.today()
+            _start = date(_today.year, 1, 1)
+            _end   = _today
+    except Exception:
+        _today = date.today()
+        _start = date(_today.year, 1, 1)
+        _end   = _today
+
+    # Hide Data Status / Sources for non-pharmacy tenants
+    _ds_style  = _show if _domain == "pharmacy" else _hide
+    _src_style = _show if _domain == "pharmacy" else _hide
+
+    return filter_label, domain_icon, _ds_style, _src_style, str(_start), str(_end)
 
 
-# Expose Flask server for gunicorn (Render.com / production)
+# ── Temporary debug endpoint (remove after diagnosis) ─────────
+@app.server.route("/debug/fix-tenant-data")
+def debug_fix_tenant_data():
+    """One-time fix: tag sales/purchases rows with correct tenant_id and upload_id."""
+    from flask import jsonify
+    from sqlalchemy import text as _text
+    try:
+        with engine.connect() as conn:
+            # Find all active uploads and patch the sales/purchases rows
+            uploads = conn.execute(_text(
+                "SELECT id, tenant_id, report_type FROM upload_history WHERE status='active'"
+            )).fetchall()
+            results = []
+            for uid, tid, rtype in uploads:
+                table = "purchases" if rtype in ("purchase","generic_purchases") else "sales"
+                # Patch rows that have NULL tenant_id/upload_id
+                r1 = conn.execute(_text(
+                    f"UPDATE {table} SET tenant_id=:tid, upload_id=:uid "
+                    f"WHERE (tenant_id IS NULL OR upload_id IS NULL)"
+                ), {"tid": tid, "uid": uid})
+                results.append({"upload_id": uid, "tenant_id": tid, "table": table,
+                                "rows_patched": r1.rowcount})
+            conn.commit()
+            # Verify
+            verify = [dict(tenant_id=r[0], upload_id=r[1], cnt=r[2])
+                      for r in conn.execute(_text(
+                "SELECT tenant_id, upload_id, COUNT(*) FROM sales GROUP BY tenant_id, upload_id"
+            )).fetchall()]
+        return jsonify({"patched": results, "sales_dist_after": verify})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.server.route("/debug/tenant")
+def debug_tenant():
+    from flask import jsonify
+    from sqlalchemy import text as _text
+    out = {}
+    # engine — local_tenants table
+    try:
+        with engine.connect() as conn:
+            lt_cols = [c[1] for c in conn.execute(_text("PRAGMA table_info(local_tenants)")).fetchall()]
+            out["local_tenants_cols"] = lt_cols
+            out["local_tenants"] = [dict(zip(lt_cols, r))
+                                    for r in conn.execute(_text("SELECT * FROM local_tenants")).fetchall()]
+    except Exception as e:
+        out["local_tenants_error"] = str(e)
+    # engine — sales / purchases / upload_history
+    try:
+        with engine.connect() as conn:
+            out["data_db_path"] = str(engine.url)
+            out["data_tables"] = [r[0] for r in conn.execute(
+                _text("SELECT name FROM sqlite_master WHERE type='table'")).fetchall()]
+            out["uploads"] = [dict(id=r[0], tenant_id=r[1], status=r[2], rtype=r[3])
+                              for r in conn.execute(_text(
+                "SELECT id, tenant_id, status, report_type FROM upload_history ORDER BY id"
+            )).fetchall()]
+            out["sales_dist"] = [dict(tenant_id=r[0], upload_id=r[1], cnt=r[2])
+                                 for r in conn.execute(_text(
+                "SELECT tenant_id, upload_id, COUNT(*) FROM sales GROUP BY tenant_id, upload_id"
+            )).fetchall()]
+            sales_cols = [c[1] for c in conn.execute(_text("PRAGMA table_info(sales)")).fetchall()]
+            out["sales_cols"] = sales_cols
+            out["sales_sample"] = [dict(zip(sales_cols, r))
+                                   for r in conn.execute(_text("SELECT * FROM sales LIMIT 2")).fetchall()]
+    except Exception as e:
+        out["data_engine_error"] = str(e)
+    return jsonify(out)
+
+
+@app.server.route("/debug/set-currency/<int:tenant_id>/<currency>")
+def debug_set_currency(tenant_id, currency):
+    from flask import jsonify
+    from sqlalchemy import text as _text
+    allowed = {"USD","INR","EUR","GBP","CAD","AUD","SGD"}
+    if currency.upper() not in allowed:
+        return jsonify({"error": f"Currency must be one of {allowed}"}), 400
+    try:
+        with engine.connect() as conn:
+            conn.execute(_text(
+                "UPDATE local_tenants SET currency=:cur, country=:ctr WHERE id=:tid"
+            ), {"cur": currency.upper(),
+                "ctr": "US" if currency.upper()=="USD" else "IN",
+                "tid": tenant_id})
+            conn.commit()
+            row = conn.execute(_text(
+                "SELECT id, name, currency, country FROM local_tenants WHERE id=:tid"),
+                {"tid": tenant_id}).fetchone()
+        return jsonify({"updated": dict(zip(["id","name","currency","country"], row)) if row else None})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ── Weekly email report routes ────────────────────────────────
+_send_report = None
+try:
+    from email_reports import send_report_now as _send_report, start_scheduler as _start_email_scheduler
+    _start_email_scheduler(engine)
+    print("[app] Weekly email report scheduler started")
+except Exception as _email_err:
+    print(f"[app] Email report init warning: {_email_err}")
+
+
+@app.server.route("/report/preview/<int:tenant_id>")
+def report_preview(tenant_id):
+    """Preview the weekly HTML email report in-browser."""
+    if _send_report is None:
+        return "<p>Email reports module not loaded.</p>", 503
+    result = _send_report(engine, tenant_id=tenant_id)
+    if result.get("preview_html"):
+        from flask import make_response
+        r = make_response(result["preview_html"])
+        r.headers["Content-Type"] = "text/html; charset=utf-8"
+        return r
+    return f"<p>Error: {result.get('reason', 'no data')}</p>", 400
+
+
+@app.server.route("/report/send/<int:tenant_id>")
+def report_send(tenant_id):
+    from flask import jsonify, request as _freq
+    if _send_report is None:
+        return jsonify({"error": "email_reports not loaded"}), 503
+    to_email = _freq.args.get("email")
+    result = _send_report(engine, tenant_id=tenant_id, to_email=to_email)
+    return jsonify(result)
+
+
+# Stripe billing routes
+try:
+    from stripe_billing import register_stripe_routes
+    register_stripe_routes(app.server, engine)
+except Exception as _stripe_err:
+    print(f"[app] Stripe init warning: {_stripe_err}")
+
+# Self-serve signup routes
+try:
+    from signup import register_signup_routes
+    import os as _os2
+    _app_base_url = _os2.environ.get("APP_BASE_URL", "http://localhost:8050")
+    register_signup_routes(app.server, engine, base_url=_app_base_url)
+except Exception as _signup_err:
+    print(f"[app] Signup init warning: {_signup_err}")
+
+
+# Marketing landing page
+try:
+    from landing_page import render_landing as _render_landing
+
+    @app.server.route("/landing")
+    def landing_page():
+        from flask import make_response
+        r = make_response(_render_landing())
+        r.headers["Content-Type"] = "text/html; charset=utf-8"
+        return r
+
+    @app.server.route("/")
+    def root_redirect():
+        from flask import redirect
+        return redirect("/landing")
+
+except Exception as _landing_err:
+    print(f"[app] Landing page init warning: {_landing_err}")
+
+
+# Expose Flask server for gunicorn
 server = app.server
 
-# -- Run -----------------------------------------------------------------------
 if __name__ == "__main__":
-    app.run(debug=True, host="127.0.0.1", port=8050)
-
-
-# Expose Flask server for gunicorn (Render.com / production)
-server = app.server
-
-# ── Run ──────────────────────────────────────────────────────────
-if __name__ == "__main__":
-    app.run(debug=True, host="127.0.0.1", port=8050)
+    import os as _os
+    debug = _os.environ.get("DASH_DEBUG", "true").lower() == "true"
+    port  = int(_os.environ.get("PORT", 8050))
+    print(f"[app] Starting InsightHub on http://127.0.0.1:{port}  (debug={debug})")
+    app.run(debug=debug, host="0.0.0.0", port=port)

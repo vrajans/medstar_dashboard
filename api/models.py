@@ -135,7 +135,7 @@ class Tenant(Base):
     id:            Mapped[int]  = mapped_column(Integer, primary_key=True, autoincrement=True)
     name:          Mapped[str]  = mapped_column(String(128), nullable=False)
     slug:          Mapped[str]  = mapped_column(String(64),  nullable=False, unique=True, index=True)
-    domain_type:   Mapped[str]  = mapped_column(String(32),  nullable=False)   # "pharmacy" | "retail"
+    domain_type:   Mapped[str]  = mapped_column(String(32),  nullable=False)   # pharmacy|retail|saas|accounting|generic
     plan:          Mapped[str]  = mapped_column(String(32),  nullable=False, default="basic")  # basic|pro|enterprise
     contact_email: Mapped[str]  = mapped_column(String(256), nullable=False, default="")
     is_active:     Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)

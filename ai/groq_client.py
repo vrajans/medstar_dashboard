@@ -19,12 +19,13 @@ Setup
 import os
 import json
 import logging
+import urllib.error
 from typing import Optional, Generator
 
 logger = logging.getLogger(__name__)
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
-GROQ_MODEL   = os.getenv("GROQ_MODEL",   "llama-3.1-70b-versatile")
+GROQ_MODEL   = os.getenv("GROQ_MODEL",   "llama-3.3-70b-versatile")
 GROQ_BASE    = "https://api.groq.com/openai/v1"
 
 # Max tokens for different use cases
@@ -70,8 +71,13 @@ def _groq_chat(messages: list[dict], model: str = GROQ_MODEL,
             choices = result.get("choices", [])
             if choices:
                 return choices[0].get("message", {}).get("content", "")
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        logger.error("[groq] HTTP %s — %s", exc.code, body)
+        print(f"[groq] HTTP {exc.code} error: {body[:300]}")
     except Exception as exc:
         logger.error("[groq] _groq_chat: %s", exc)
+        print(f"[groq] Error: {exc}")
     return None
 
 

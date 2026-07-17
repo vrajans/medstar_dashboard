@@ -54,10 +54,40 @@ def _refresh_api_token() -> Optional[str]:
     return None
 
 
+def _auto_login_api() -> Optional[str]:
+    """Fallback: login to FastAPI with service-account credentials from env.
+
+    Used when the Dash session has no token (e.g. FastAPI was offline at
+    login time and has since come up).  Stores tokens in flask_session.
+    """
+    svc_user = os.environ.get("FASTAPI_ADMIN_USER", "admin")
+    svc_pass = os.environ.get("FASTAPI_ADMIN_PASS", "admin123")
+    try:
+        resp = requests.post(
+            f"{API_BASE}/auth/login",
+            json={"username": svc_user, "password": svc_pass},
+            timeout=5,
+        )
+        if resp.ok:
+            data = resp.json()
+            flask_session["api_access_token"]  = data.get("access_token")
+            flask_session["api_refresh_token"] = data.get("refresh_token")
+            print(f"[tenant_portal] Auto-login to FastAPI succeeded for '{svc_user}'")
+            return data.get("access_token")
+        else:
+            print(f"[tenant_portal] Auto-login failed: {resp.status_code} {resp.text[:200]}")
+    except Exception as exc:
+        print(f"[tenant_portal] Auto-login error: {exc}")
+    return None
+
+
 def call_api(method: str, path: str, json_body: Any = None, params: dict = None) -> tuple[int, Any]:
     """Call the FastAPI service.  Returns (status_code, response_json).
 
-    On 401, automatically attempts a token refresh once, then retries.
+    Token resolution order:
+      1. Use existing token from flask_session
+      2. If missing, auto-login with service-account credentials
+      3. If 401, try refresh token; if refresh fails, try auto-login once more
     """
     def _do(token: Optional[str]):
         headers = {"Authorization": f"Bearer {token}"} if token else {}
@@ -71,12 +101,19 @@ def call_api(method: str, path: str, json_body: Any = None, params: dict = None)
         )
 
     try:
-        resp = _do(get_api_token())
-        # If the access token expired, try to refresh once and retry
+        token = get_api_token()
+        # If no token at all, try service-account auto-login first
+        if not token:
+            token = _auto_login_api()
+
+        resp = _do(token)
+
+        # If still 401, try refresh then auto-login as last resort
         if resp.status_code == 401:
-            new_tok = _refresh_api_token()
+            new_tok = _refresh_api_token() or _auto_login_api()
             if new_tok:
                 resp = _do(new_tok)
+
         try:
             data = resp.json()
         except Exception:
@@ -100,8 +137,11 @@ MODULE_LABELS = {
 }
 
 DOMAIN_OPTIONS = [
-    {"label": "Pharmacy", "value": "pharmacy"},
-    {"label": "Retail",   "value": "retail"},
+    {"label": "💊 Pharmacy / Medical",    "value": "pharmacy"},
+    {"label": "🛍️ Retail / E-commerce",  "value": "retail"},
+    {"label": "💻 SaaS / Software",       "value": "saas"},
+    {"label": "📒 Accounting / Finance",  "value": "accounting"},
+    {"label": "📈 General Business",      "value": "generic"},
 ]
 
 PLAN_OPTIONS = [
@@ -233,12 +273,12 @@ def _add_tenant_form() -> dbc.Card:
             dbc.Row([
                 dbc.Col([
                     dbc.Label("Tenant Name", style={"fontSize": "0.75rem", "fontWeight": "700"}),
-                    dbc.Input(id="new-tenant-name", placeholder="e.g. Apollo Pharmacy",
+                    dbc.Input(id="new-tenant-name", placeholder="e.g. Apollo Pharmacy / Acme SaaS",
                               style={"fontSize": "0.82rem"}),
                 ], width=4),
                 dbc.Col([
                     dbc.Label("Slug", style={"fontSize": "0.75rem", "fontWeight": "700"}),
-                    dbc.Input(id="new-tenant-slug", placeholder="e.g. apollo-pharmacy (lowercase, hyphens)",
+                    dbc.Input(id="new-tenant-slug", placeholder="e.g. apollo-pharmacy or acme-saas",
                               style={"fontSize": "0.82rem"}),
                 ], width=3),
                 dbc.Col([
@@ -275,12 +315,31 @@ def _add_tenant_form() -> dbc.Card:
 
 # ── Full tab layout ────────────────────────────────────────────────────────────
 
-def render_tenants_tab() -> html.Div:
-    """Render the full Tenants admin tab layout."""
-    # Fetch tenant list from FastAPI (may return empty if not yet authenticated)
-    _, tenants = call_api("GET", "/tenants")
+def render_tenants_tab(local_tenants: list = None) -> html.Div:
+    """Render the full Tenants admin tab layout.
+
+    local_tenants: pre-fetched rows from local SQLite (passed when FastAPI is offline).
+    """
+    # Try FastAPI first; fall back to local_tenants if offline
+    status, tenants = call_api("GET", "/tenants")
     if not isinstance(tenants, list):
+        # FastAPI offline — use locally saved tenants if provided
         tenants = []
+        if local_tenants:
+            # Convert local_tenants row dicts to the FastAPI response shape
+            tenants = [
+                {
+                    "id":           r.get("id", ""),
+                    "name":         r.get("Name", ""),
+                    "slug":         r.get("Slug", ""),
+                    "domain_type":  r.get("Domain", "pharmacy").lower(),
+                    "plan":         r.get("Plan", "basic").lower(),
+                    "is_active":    r.get("Status", "Active") == "Active",
+                    "contact_email": r.get("Contact", ""),
+                    "created_at":   r.get("Created", ""),
+                }
+                for r in local_tenants
+            ]
 
     count = len(tenants)
 

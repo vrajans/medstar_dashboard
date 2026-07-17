@@ -118,7 +118,7 @@ def _step1_profile(tenant_id=None, engine=None, error=None, prefill=None) -> htm
     return _wizard_card("🏢 Business Profile", [
         html.P("Tell us about your business so we can personalise your dashboard.",
                style={"color":C_GRAY,"fontSize":"0.85rem"}),
-        _field("Business Name",    "onb-name",      pf.get("name",""),    "MedStar Pharmacy"),
+        _field("Business Name",    "onb-name",      pf.get("name",""),    "Acme Retail Co."),
         _field("Owner Email",      "onb-email",     pf.get("email",""),   "owner@mybusiness.com"),
         _field("Owner Phone",      "onb-phone",     pf.get("phone",""),   "+91 98765 43210"),
         html.Div([
@@ -446,11 +446,22 @@ def render_upload_rollback_tab(
 
     return html.Div([
         html.Div([
-            html.H5("Upload History & Rollback",
-                    style={"margin":0,"fontWeight":700,"color":C_GREEN}),
-            html.Span("Rollback removes the upload and reverts the data to the previous state.",
-                      style={"fontSize":"0.78rem","color":C_GRAY}),
-        ], style={"marginBottom":"1rem"}),
+            html.Div([
+                html.H5("Upload History & Rollback",
+                        style={"margin":0,"fontWeight":700,"color":C_GREEN}),
+                html.Span("Rollback removes the upload and reverts the data to the previous state.",
+                          style={"fontSize":"0.78rem","color":C_GRAY}),
+            ]),
+            dbc.Button(
+                "🧹 Remove Duplicate Uploads",
+                id="fix-duplicates-btn-history",
+                color="warning",
+                size="sm",
+                outline=True,
+                style={"fontSize":"0.78rem","fontWeight":600},
+            ),
+        ], style={"marginBottom":"1rem","display":"flex","alignItems":"center",
+                  "justifyContent":"space-between","flexWrap":"wrap","gap":"0.5rem"}),
         html.Div(id="rollback-feedback"),
         html.Div([
             html.Table([
