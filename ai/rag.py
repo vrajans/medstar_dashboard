@@ -263,7 +263,7 @@ def rag_answer(
     language:    str                      = "English",
     sales_df:    Optional[pd.DataFrame]   = None,
     purchase_df: Optional[pd.DataFrame]   = None,
-) -> tuple[str, list[dict]]:
+) -> tuple[str, list[dict], list]:
     """
     Answer a business question using direct data injection into Groq.
 
@@ -271,7 +271,7 @@ def rag_answer(
     New code should use agent_answer() which routes through the full
     Multi-Agent Platform (Router → Schema/Analytics/Insight/Forecast/Quality).
 
-    Returns (answer_text, updated_chat_history).
+    Returns (answer_text, updated_chat_history, trace_cards).
     """
     from ai.groq_client import chat, build_kpi_context
 
@@ -291,7 +291,7 @@ def rag_answer(
         context=full_context,
         language=language,
     )
-    return answer, updated_history
+    return answer, updated_history, []   # [] = no agent trace cards
 
 
 # =============================================================================

@@ -19,19 +19,32 @@ from dash import html, dcc
 import dash_bootstrap_components as dbc
 from datetime import date
 
-C_GREEN  = "#1e7e4b"
-C_BLUE   = "#0d6efd"
-C_ORANGE = "#fd7e14"
-C_RED    = "#dc3545"
-C_TEAL   = "#17a2b8"
-C_PURPLE = "#6f42c1"
-C_GRAY   = "#6b7280"
+C_GREEN  = "#059669"   # positive/success
+C_BLUE   = "#2563EB"   # primary brand
+C_SKY    = "#0EA5E9"   # secondary accent
+C_ORANGE = "#D97706"   # warning/costs
+C_RED    = "#DC2626"   # danger/negative
+C_TEAL   = "#0D9488"   # teal
+C_PURPLE = "#4F46E5"   # indigo
+C_NAVY   = "#1E293B"   # headings
+C_GRAY   = "#64748B"   # secondary text
+C_MUTED  = "#94A3B8"
+C_BORDER = "#E2E8F0"
+C_WHITE  = "#FFFFFF"
 
 CHART_LAYOUT = dict(
     paper_bgcolor="rgba(0,0,0,0)",
     plot_bgcolor ="rgba(0,0,0,0)",
-    font=dict(family="Inter,Arial,sans-serif", size=11),
-    margin=dict(l=40, r=20, t=30, b=50),
+    font=dict(family="Inter,system-ui,-apple-system,sans-serif", size=11, color=C_NAVY),
+    margin=dict(l=8, r=8, t=30, b=8),
+    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1,
+                bgcolor="rgba(0,0,0,0)", font=dict(size=11)),
+    xaxis=dict(gridcolor="#F1F5F9", linecolor=C_BORDER, tickfont=dict(size=10),
+               showgrid=False, zeroline=False),
+    yaxis=dict(gridcolor="#F1F5F9", linecolor="rgba(0,0,0,0)", tickfont=dict(size=10),
+               showgrid=True, zeroline=False),
+    hoverlabel=dict(bgcolor=C_WHITE, bordercolor=C_BORDER,
+                    font=dict(family="Inter,system-ui,sans-serif", size=12, color=C_NAVY)),
 )
 
 MONTHS = ["Jan","Feb","Mar","Apr","May","Jun",
@@ -163,7 +176,7 @@ def render_yoy_tab(
             delta_el,
         ], style={"background": "#fff", "borderRadius": "10px",
                   "padding": "1rem 1.2rem", "boxShadow": "0 1px 4px rgba(0,0,0,0.07)",
-                  "borderTop": f"3px solid {C_GREEN}"})
+                  "borderTop": f"3px solid {C_BLUE}"})
 
     kpi_row = html.Div([
         kpi_card(f"Sales {curr_year}",    s_tot_c, s_tot_p),
@@ -184,7 +197,7 @@ def render_yoy_tab(
     fig_sales.add_trace(go.Bar(
         x=MONTHS, y=s_curr.values,
         name=str(curr_year),
-        marker_color=C_GREEN,
+        marker_color=C_BLUE,
     ))
     fig_sales.update_layout(
         **CHART_LAYOUT,
@@ -292,7 +305,7 @@ def render_yoy_tab(
     return html.Div([
         html.Div([
             html.H4("Year-over-Year Analysis",
-                    style={"margin":0,"fontWeight":700,"color":C_GREEN}),
+                    style={"margin":0,"fontWeight":700,"color":C_NAVY}),
             html.Span("Sales & Purchase comparison across years",
                       style={"fontSize":"0.78rem","color":C_GRAY}),
         ], style={"marginBottom":"1rem"}),

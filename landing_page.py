@@ -661,12 +661,15 @@ footer{
       <a href="#pricing">Pricing</a>
       <a href="/signup">Sign up</a>
       <a href="/login">Sign in</a>
+      <a href="/privacy">Privacy Policy</a>
+      <a href="/data-deletion">Delete My Data</a>
       <a href="mailto:hello@insighthub.io">Contact</a>
     </div>
-    <p class="footer-copy">© 2025 InsightHub. All rights reserved.</p>
+    <p class="footer-copy">© 2026 InsightHub Technologies, Inc. All rights reserved.</p>
   </div>
 </footer>
 
+<script src="/cookie-consent.js" defer></script>
 </body>
 </html>"""
 

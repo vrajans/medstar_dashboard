@@ -28,6 +28,7 @@ from ..schemas import (
     UserCreate,
     UserOut,
     UserUpdate,
+    PasswordReset,
 )
 from ..security import (
     ACCESS_TOKEN_EXPIRES_SECONDS,
@@ -169,8 +170,28 @@ async def create_user(body: UserCreate, admin: AdminUser, db: DBSession):
         display_name  = body.display_name or body.username.capitalize(),
         password_hash = hash_password(body.password),
         role          = body.role,
+        tenant_id     = body.tenant_id,
     )
     db.add(user)
+    await db.flush()
+    await db.refresh(user)
+    return user
+
+
+@router.get("/users", response_model=list[UserOut], summary="List users (admin)")
+async def list_users(admin: AdminUser, db: DBSession):
+    result = await db.execute(select(User).order_by(User.id))
+    return result.scalars().all()
+
+
+@router.post("/users/{user_id}/reset-password", response_model=UserOut,
+             summary="Reset a user's password (admin)")
+async def reset_user_password(user_id: int, body: PasswordReset, admin: AdminUser, db: DBSession):
+    result = await db.execute(select(User).where(User.id == user_id))
+    user: User | None = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    user.password_hash = hash_password(body.new_password)
     await db.flush()
     await db.refresh(user)
     return user
@@ -191,6 +212,8 @@ async def update_user(user_id: int, body: UserUpdate, admin: AdminUser, db: DBSe
         user.role = body.role
     if body.is_active is not None:
         user.is_active = body.is_active
+    if body.tenant_id is not None:
+        user.tenant_id = body.tenant_id
 
     await db.flush()
     await db.refresh(user)

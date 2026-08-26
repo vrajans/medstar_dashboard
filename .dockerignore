@@ -1,0 +1,26 @@
+# Keep the Python (api/dash) build context small.
+.git
+.gitignore
+venv/
+.venv/
+__pycache__/
+**/__pycache__/
+*.pyc
+*.db
+*.sqlite
+node_modules/
+customer_app/
+warehouse_dbt/target/
+warehouse_dbt/dbt_packages/
+warehouse_dbt/logs/
+*.duckdb
+.claude/
+.pytest_cache/
+# demo/scratch artifacts (not needed in the image)
+*.pdf
+*.pptx
+*.xlsx
+*.docx
+demo_claims*.csv
+sample_claims.csv
+outputs/

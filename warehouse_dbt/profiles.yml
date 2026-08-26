@@ -1,0 +1,26 @@
+# dbt connection profiles for InsightHub.
+#   dev  → DuckDB (fast local iteration + CI parity tests)
+#   prod → Postgres (the live Neon / Cloud SQL warehouse the Flask app writes to)
+#
+# Run locally:   dbt build --profiles-dir . --project-dir . --target dev
+# Run in prod:   dbt build --profiles-dir . --project-dir . --target prod
+# Prod reads PG connection details from environment variables (never commit secrets).
+insighthub:
+  target: dev
+  outputs:
+    dev:
+      type: duckdb
+      path: "dbt_dev.duckdb"
+      schema: main
+      threads: 4
+
+    prod:
+      type: postgres
+      host: "{{ env_var('PGHOST', 'localhost') }}"
+      port: "{{ (env_var('PGPORT', '5432')) | int }}"
+      user: "{{ env_var('PGUSER', 'insighthub') }}"
+      password: "{{ env_var('PGPASSWORD', '') }}"
+      dbname: "{{ env_var('PGDATABASE', 'insighthub') }}"
+      schema: "analytics"
+      threads: 4
+      sslmode: require

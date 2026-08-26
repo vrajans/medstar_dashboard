@@ -1,0 +1,57 @@
+version: 2
+
+models:
+  - name: dim_date
+    description: "Calendar dimension derived from dates present in the data."
+    columns:
+      - name: date_key
+        description: "YYYYMMDD integer surrogate key."
+        data_tests: [unique, not_null]
+
+  - name: dim_tenant
+    description: "Tenant / customer_code / domain."
+    columns:
+      - name: tenant_id
+        description: "Tenant identifier (nullable for the seeded reference dataset)."
+
+  - name: dim_entity
+    description: "SCD2 business-entity dimension (branch / customer / supplier) from the snapshot."
+    columns:
+      - name: entity_id
+        description: "Stable natural key hash for the entity."
+        data_tests: [not_null]
+      - name: is_current
+        description: "1 for the live version, 0 for historical SCD2 versions."
+        data_tests:
+          - accepted_values:
+              values: [0, 1]
+
+  - name: fct_transaction
+    description: "Conformed transaction fact — one row per source measure event."
+    columns:
+      - name: business_key_hash
+        description: "Idempotency key: coordinate + occurrence. Unique per fact row."
+        data_tests: [unique, not_null]
+      - name: tenant_id
+        description: "Owning tenant (row-level scope key for RBAC)."
+      - name: txn_type
+        description: "sale | purchase."
+        data_tests:
+          - accepted_values:
+              values: ['sale', 'purchase']
+      - name: date_key
+        description: "FK to dim_date."
+        data_tests:
+          - relationships:
+              to: ref('dim_date')
+              field: date_key
+
+  - name: mart_transaction
+    description: "Flattened serving mart the analytics + AI layers read (OBT)."
+    columns:
+      - name: tenant_id
+        description: "Row-level tenant scope."
+      - name: txn_type
+        data_tests:
+          - accepted_values:
+              values: ['sale', 'purchase']

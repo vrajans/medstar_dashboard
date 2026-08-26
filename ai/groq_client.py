@@ -24,9 +24,15 @@ from typing import Optional, Generator
 
 logger = logging.getLogger(__name__)
 
-GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 GROQ_MODEL   = os.getenv("GROQ_MODEL",   "llama-3.3-70b-versatile")
 GROQ_BASE    = "https://api.groq.com/openai/v1"
+
+def _get_api_key() -> str:
+    """Read key at call time so load_dotenv() in app.py is always honoured."""
+    return os.getenv("GROQ_API_KEY", "")
+
+# Keep for backward-compat (e.g. any module that does `from groq_client import GROQ_API_KEY`)
+GROQ_API_KEY = _get_api_key()
 
 # Max tokens for different use cases
 MAX_TOKENS = {
@@ -41,10 +47,31 @@ def _groq_chat(messages: list[dict], model: str = GROQ_MODEL,
                max_tokens: int = 512, temperature: float = 0.3,
                stream: bool = False) -> Optional[str]:
     """
-    Call Groq's chat completions API.
-    Returns the assistant message text or None on failure.
+    Chat completion — now routed through the LLM Gateway so every AI feature
+    supports multiple providers and per-tenant BYO keys. Falls back to a direct
+    Groq call if the gateway is unavailable, preserving the original behavior.
+
+    Provider/model are resolved by the gateway from (in precedence order):
+      request tenant context (BYO) → env LLM_PROVIDER/LLM_MODEL → Groq default.
+    The `model` arg is honored only when the resolved provider is Groq, so the
+    legacy default (GROQ_MODEL) still applies to Groq-routed calls.
     """
-    if not GROQ_API_KEY:
+    try:
+        from ai import llm_gateway
+        cfg = llm_gateway.resolve_config()
+        # keep legacy model override behavior for Groq-routed calls
+        _model = model if cfg.provider == "groq" else None
+        reply = llm_gateway.chat(messages, max_tokens=max_tokens,
+                                 temperature=temperature, model=_model, config=None)
+        if reply is not None:
+            return reply
+        # gateway returned None → fall through to the direct Groq path below
+    except Exception as exc:
+        logger.debug("[groq] gateway unavailable, using direct call: %s", exc)
+
+    # ── Direct Groq fallback (original implementation) ──
+    api_key = _get_api_key()
+    if not api_key:
         logger.warning("[groq] GROQ_API_KEY not set — AI features disabled.")
         return None
     try:
@@ -61,8 +88,9 @@ def _groq_chat(messages: list[dict], model: str = GROQ_MODEL,
             f"{GROQ_BASE}/chat/completions",
             data=data,
             headers={
-                "Authorization": f"Bearer {GROQ_API_KEY}",
+                "Authorization": f"Bearer {api_key}",
                 "Content-Type":  "application/json",
+                "User-Agent":    "InsightHub/1.0 (Python urllib)",
             },
             method="POST",
         )
@@ -103,7 +131,7 @@ def generate_narrative_summary(
         "alerts":    [{"level":"danger","msg":"..."}]
     }
     """
-    if not GROQ_API_KEY:
+    if not _get_api_key():
         return _fallback_narrative(kpi_data, period, tenant_name)
 
     alerts_text = ""
@@ -112,10 +140,7 @@ def generate_narrative_summary(
             f"- {a['msg']}" for a in kpi_data["alerts"]
         )
 
-    def _fmt(v):
-        if v >= 1e5: return f"₹{v/1e5:.2f}L"
-        if v >= 1e3: return f"₹{v/1e3:.1f}K"
-        return f"₹{v:.0f}"
+    _fmt = _make_fmt(kpi_data.get("currency", "USD"))
 
     prompt = f"""You are a business analytics assistant for {tenant_name}.
 Write a concise, friendly narrative summary of the following business performance data for {period}.
@@ -147,11 +172,7 @@ def _fallback_narrative(kpi_data: dict, period: str, tenant_name: str) -> str:
     sales   = kpi_data.get("sales", 0)
     margin  = kpi_data.get("margin", 0)
     bills   = kpi_data.get("bills",  0)
-
-    def _fmt(v):
-        if v >= 1e5: return f"₹{v/1e5:.2f}L"
-        if v >= 1e3: return f"₹{v/1e3:.1f}K"
-        return f"₹{v:.0f}"
+    _fmt    = _make_fmt(kpi_data.get("currency", "USD"))
 
     health = "healthy" if margin >= 20 else "under pressure"
     return (
@@ -175,7 +196,7 @@ def detect_anomalies(
     Use Groq LLM to identify anomalies in a time series.
     Returns list of {"date": ..., "type": ..., "description": ...}
     """
-    if not GROQ_API_KEY or not daily_series:
+    if not _get_api_key() or not daily_series:
         return _rule_based_anomalies(daily_series)
 
     # Limit to last 30 data points to stay within context window
@@ -265,7 +286,7 @@ def chat(
     Returns (response_text, updated_history).
     history format: list of {"role": "user"|"assistant", "content": "..."}
     """
-    if not GROQ_API_KEY:
+    if not _get_api_key():
         return ("AI chat is not available. Please set GROQ_API_KEY in your environment variables.",
                 history)
 
@@ -294,12 +315,25 @@ def chat(
     return response, new_history
 
 
+def _make_fmt(currency: str = "USD"):
+    """Return a value-formatter function for the given currency code."""
+    if currency == "INR":
+        def _fmt(v):
+            if v >= 1e7: return f"₹{v/1e7:.2f}Cr"
+            if v >= 1e5: return f"₹{v/1e5:.2f}L"
+            if v >= 1e3: return f"₹{v/1e3:.1f}K"
+            return f"₹{v:.0f}"
+    else:  # USD / default
+        def _fmt(v):
+            if v >= 1e6: return f"${v/1e6:.2f}M"
+            if v >= 1e3: return f"${v/1e3:.1f}K"
+            return f"${v:.0f}"
+    return _fmt
+
+
 def build_kpi_context(kpi_data: dict, rag_results: list[str] = None) -> str:
     """Build a context string to inject into the chat system prompt."""
-    def _fmt(v):
-        if v >= 1e5: return f"₹{v/1e5:.2f}L"
-        if v >= 1e3: return f"₹{v/1e3:.1f}K"
-        return f"₹{v:.0f}"
+    _fmt = _make_fmt(kpi_data.get("currency", "USD"))
 
     lines = [
         f"Sales (current period):  {_fmt(kpi_data.get('sales', 0))}",

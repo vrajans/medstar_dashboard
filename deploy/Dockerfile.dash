@@ -1,0 +1,18 @@
+# Dash admin app → Cloud Run. Build context = repo root.
+FROM python:3.11-slim
+
+WORKDIR /app
+ENV PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt .
+RUN pip install -r requirements.txt gunicorn
+
+COPY . .
+
+# 1 worker keeps the in-process scheduler/warehouse threads single-instance.
+ENV PORT=8080 DASH_DEBUG=false
+CMD exec gunicorn app:server --bind 0.0.0.0:${PORT} --workers 1 --threads 8 --timeout 120

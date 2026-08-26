@@ -48,6 +48,7 @@ class UserOut(BaseModel):
     display_name: str
     role:         str
     is_active:    bool
+    tenant_id:    Optional[int] = None
     created_at:   datetime
 
 
@@ -56,11 +57,17 @@ class UserCreate(BaseModel):
     display_name: str = Field("", max_length=128)
     password:     str = Field(..., min_length=6)
     role:         str = Field("viewer", pattern="^(admin|viewer)$")
+    tenant_id:    Optional[int] = None
 
 
 class UserUpdate(BaseModel):
     role:      Optional[str]  = Field(None, pattern="^(admin|viewer)$")
     is_active: Optional[bool] = None
+    tenant_id: Optional[int]  = None
+
+
+class PasswordReset(BaseModel):
+    new_password: str = Field(..., min_length=6)
 
 
 # ── Sales schemas ─────────────────────────────────────────────────────────────
@@ -171,7 +178,7 @@ class TenantCreate(BaseModel):
     name:          str = Field(..., min_length=2, max_length=128)
     slug:          str = Field(..., min_length=2, max_length=64,
                                pattern=r"^[a-z0-9-]+$")   # lowercase, hyphens only
-    domain_type:   str = Field(..., pattern="^(pharmacy|retail|saas|accounting|generic)$")
+    domain_type:   str = Field(..., pattern="^(pharmacy|retail|saas|accounting|healthcare|generic)$")
     plan:          str = Field("basic", pattern="^(basic|pro|enterprise)$")
     contact_email: str = Field("", max_length=256)
 

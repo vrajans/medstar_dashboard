@@ -12,12 +12,50 @@ Tables:
 from datetime import datetime
 
 from sqlalchemy import (
-    BigInteger, Boolean, DateTime, Float, Integer,
+    BigInteger, Boolean, DateTime, Float, Integer, JSON,
     String, Text, UniqueConstraint, func,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .database import Base
+
+
+class AdhocDataset(Base):
+    """Persisted ad-hoc dataset — schema-on-read. Rows are stored as JSON so any
+    tabular data can land in the warehouse, tenant-scoped and durable across
+    sessions (satisfies the persistence claim vs one-time chat analysis)."""
+    __tablename__ = "adhoc_dataset"
+
+    id:         Mapped[int]  = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tenant_id:  Mapped[int | None] = mapped_column(Integer, index=True)
+    name:       Mapped[str]  = mapped_column(String(200), nullable=False)
+    columns:    Mapped[list] = mapped_column(JSON, default=list)
+    row_count:  Mapped[int]  = mapped_column(Integer, default=0)
+    data:       Mapped[list] = mapped_column(JSON, default=list)   # list of row dicts
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class PIRun(Base):
+    """A persisted Payment-Integrity analysis run. The raw claims land in a
+    warehouse dataset (adhoc_dataset, linked by dataset_id); this row holds the
+    computed result so a customer's findings survive across sessions."""
+    __tablename__ = "pi_run"
+
+    id:             Mapped[int]  = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tenant_id:      Mapped[int | None] = mapped_column(Integer, index=True)
+    name:           Mapped[str]  = mapped_column(String(200), nullable=False)
+    dataset_id:     Mapped[int | None] = mapped_column(Integer)   # → adhoc_dataset.id (lineage)
+    row_count:      Mapped[int]  = mapped_column(Integer, default=0)
+    total_paid:     Mapped[float] = mapped_column(Float, default=0.0)
+    amount_at_risk: Mapped[float] = mapped_column(Float, default=0.0)
+    pct_at_risk:    Mapped[float] = mapped_column(Float, default=0.0)
+    flagged_claims: Mapped[int]  = mapped_column(Integer, default=0)
+    result:         Mapped[dict] = mapped_column(JSON, default=dict)   # summary/findings/providers
+    created_at:     Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
 
 
 # ── Users ─────────────────────────────────────────────────────────────────────
@@ -30,6 +68,8 @@ class User(Base):
     password_hash:Mapped[str]  = mapped_column(Text, nullable=False)
     role:         Mapped[str]  = mapped_column(String(16), nullable=False, default="viewer")
     is_active:    Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # Which customer (tenant) this login belongs to. NULL = internal/admin (all-access).
+    tenant_id:    Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     created_at:   Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

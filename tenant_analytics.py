@@ -795,6 +795,76 @@ def render_customers(s, tenant_name, error=None, cur="$"):
     ], style={"padding": "0.15rem 0.5rem 0.5rem"})
 
 
+# ── Cash Flow tab ────────────────────────────────────────────────────────────
+
+def render_cashflow(s: pd.DataFrame, p: pd.DataFrame, tenant_name: str,
+                    error=None, cur="$") -> html.Div:
+    """Net cash flow: revenue − purchases, month-by-month."""
+    if error:
+        return html.Div(dbc.Alert(f"Error: {error}", color="danger"), style={"padding": "1rem"})
+
+    rev  = s["net_amount"].sum()  if not s.empty and "net_amount" in s.columns  else 0
+    cost = p["net_amount"].sum()  if not p.empty and "net_amount" in p.columns  else 0
+    net  = rev - cost
+
+    kpi_row = html.Div([
+        _kpi_card("Total Revenue",   _fmt(rev,  cur), None, color=C_GREEN),
+        _kpi_card("Total Costs",     _fmt(cost, cur), None, color=C_AMBER),
+        _kpi_card("Net Cash Flow",   _fmt(net,  cur), None,
+                  color=C_GREEN if net >= 0 else C_RED),
+    ], style={"display": "flex", "gap": "0.7rem", "marginBottom": "1.1rem", "flexWrap": "wrap"})
+
+    # Monthly waterfall
+    try:
+        s_mon = _monthly(s).rename(columns={"net_amount": "revenue"}) if not s.empty else pd.DataFrame()
+        p_mon = _monthly(p).rename(columns={"net_amount": "cost"})    if not p.empty else pd.DataFrame()
+        if not s_mon.empty and not p_mon.empty:
+            cf = s_mon.merge(p_mon, on="month", how="outer").fillna(0)
+        elif not s_mon.empty:
+            cf = s_mon.copy(); cf["cost"] = 0
+        elif not p_mon.empty:
+            cf = p_mon.copy(); cf["revenue"] = 0
+        else:
+            cf = pd.DataFrame()
+
+        if not cf.empty:
+            cf["net"] = cf["revenue"] - cf["cost"]
+            fig_cf = go.Figure()
+            fig_cf.add_trace(go.Bar(
+                x=cf["month"], y=cf["revenue"], name="Revenue",
+                marker_color=C_GREEN, opacity=0.82,
+                hovertemplate="%{x}<br>Revenue: <b>" + cur + "%{y:,.0f}</b><extra></extra>",
+            ))
+            fig_cf.add_trace(go.Bar(
+                x=cf["month"], y=cf["cost"], name="Cost",
+                marker_color=C_AMBER, opacity=0.82,
+                hovertemplate="%{x}<br>Cost: <b>" + cur + "%{y:,.0f}</b><extra></extra>",
+            ))
+            fig_cf.add_trace(go.Scatter(
+                x=cf["month"], y=cf["net"], name="Net",
+                mode="lines+markers",
+                line=dict(color=C_BLUE, width=2, dash="dot"),
+                marker=dict(size=6),
+                hovertemplate="%{x}<br>Net: <b>" + cur + "%{y:,.0f}</b><extra></extra>",
+            ))
+            fig_cf.update_layout(
+                barmode="group", bargap=0.22,
+                yaxis=dict(tickprefix=cur, tickformat=",.0f"),
+                legend=dict(orientation="h", x=0, y=1.12),
+            )
+            cf_chart = _card("Monthly Revenue vs Cost", _fig(fig_cf, 320))
+        else:
+            cf_chart = html.Div()
+    except Exception:
+        cf_chart = html.Div()
+
+    return html.Div([
+        _section_header(f"{tenant_name} — Cash Flow"),
+        kpi_row,
+        cf_chart,
+    ], style={"padding": "0.15rem 0.5rem 0.5rem"})
+
+
 # ── Public entry point ────────────────────────────────────────────────────────
 
 def render_tab(tab, s, p, tenant_name, error=None, cur="$"):
@@ -808,6 +878,6 @@ def render_tab(tab, s, p, tenant_name, error=None, cur="$"):
     elif tab in ("compare", "customers"):
         return render_customers(s, tenant_name, error, cur)
     elif tab == "cashflow":
-        return render_revenue(s, tenant_name, error, cur)
+        return render_cashflow(s, p, tenant_name, error, cur)
     else:
         return render_overview(s, p, tenant_name, error, cur)

@@ -1,0 +1,11 @@
+version: 2
+
+sources:
+  - name: app
+    description: "Raw operational tables written by the InsightHub Flask app on upload."
+    schema: "{{ env_var('DBT_SOURCE_SCHEMA', 'main') }}"
+    tables:
+      - name: sales
+        description: "Raw sales rows (aggregate daily-branch grain for pharmacy; transaction grain for generic tenants)."
+      - name: purchases
+        description: "Raw purchase / vendor-invoice rows (GRN / invoice grain)."

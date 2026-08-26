@@ -1,0 +1,27 @@
+name: 'insighthub'
+version: '1.0.0'
+config-version: 2
+
+profile: 'insighthub'
+
+model-paths: ["models"]
+snapshot-paths: ["snapshots"]
+macro-paths: ["macros"]
+seed-paths: ["seeds"]
+test-paths: ["tests"]
+
+target-path: "target"
+clean-targets:
+  - "target"
+  - "dbt_packages"
+
+# Formalized transformation layer for the InsightHub dimensional warehouse.
+# Mirrors warehouse.py: staging -> SCD2 snapshot -> conformed fact -> serving mart.
+models:
+  insighthub:
+    staging:
+      +materialized: view
+    marts:
+      +materialized: table
+      fct_transaction:
+        +materialized: incremental

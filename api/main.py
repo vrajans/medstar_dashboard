@@ -24,6 +24,7 @@ from .models import User, SalesRecord, PurchaseRecord, RefreshToken  # noqa: F40
 from .models import Tenant, TenantModule, SchemaMapping              # noqa: F401 (register all models)
 from .routers import auth, sales, purchases
 from .routers import tenants, domains
+from .routers import analytics, ai, adhoc, pi
 from .schemas import HealthResponse
 from .security import hash_password
 from .domain_library import DEFAULT_MODULES, MEDSTAR_DEFAULT_MAPPINGS
@@ -32,6 +33,15 @@ from .domain_library import DEFAULT_MODULES, MEDSTAR_DEFAULT_MAPPINGS
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Additive migration in its OWN transaction — a failed ALTER (column already
+    # exists) must not poison the create_all/seed transaction on PostgreSQL.
+    from sqlalchemy import text as _text
+    try:
+        async with engine.begin() as _mconn:
+            await _mconn.execute(_text("ALTER TABLE users ADD COLUMN tenant_id INTEGER"))
+    except Exception:
+        pass  # column already exists
+
     async with engine.begin() as conn:
         # Create all tables (no-op if they already exist)
         await conn.run_sync(Base.metadata.create_all)
@@ -110,19 +120,22 @@ app = FastAPI(
     redoc_url   = "/redoc",
 )
 
-# ── CORS (allow Dash on :8050 to call this API) ───────────────────────────────
-
+# ── CORS ──────────────────────────────────────────────────────────────────────
+# Local dev origins by default; add the deployed customer-app + Dash URLs in
+# production via CORS_ORIGINS (comma-separated), e.g.
+#   CORS_ORIGINS=https://app.example.com,https://admin.example.com
+import os as _os
+_default_origins = [
+    "http://localhost:8050", "http://127.0.0.1:8050",
+    "http://localhost:3000", "http://127.0.0.1:3000",
+]
+_env_origins = [o.strip() for o in _os.getenv("CORS_ORIGINS", "").split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins  = [
-        "http://localhost:8050",
-        "http://127.0.0.1:8050",
-        "http://localhost:3000",   # future React frontend
-        "http://127.0.0.1:3000",
-    ],
-    allow_credentials = True,
-    allow_methods     = ["*"],
-    allow_headers     = ["*"],
+    allow_origins      = _default_origins + _env_origins,
+    allow_credentials  = True,
+    allow_methods      = ["*"],
+    allow_headers      = ["*"],
 )
 
 # ── Routers ───────────────────────────────────────────────────────────────────
@@ -132,6 +145,10 @@ app.include_router(sales.router)
 app.include_router(purchases.router)
 app.include_router(tenants.router)
 app.include_router(domains.router)
+app.include_router(analytics.router)
+app.include_router(ai.router)
+app.include_router(adhoc.router)
+app.include_router(pi.router)
 
 # ── Health check ──────────────────────────────────────────────────────────────
 

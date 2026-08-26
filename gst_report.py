@@ -20,19 +20,33 @@ from dash import html, dcc
 import dash_bootstrap_components as dbc
 from datetime import datetime
 
-# ── Colour constants (same palette as app.py) ─────────────────────────────────
-C_GREEN  = "#1e7e4b"
-C_BLUE   = "#0d6efd"
-C_ORANGE = "#fd7e14"
-C_RED    = "#dc3545"
-C_TEAL   = "#17a2b8"
-C_PURPLE = "#6f42c1"
+# ── Colour constants — InsightHub Design System v3 ────────────────────────────
+C_GREEN  = "#059669"   # positive/success
+C_BLUE   = "#2563EB"   # primary brand
+C_SKY    = "#0EA5E9"   # secondary accent
+C_ORANGE = "#D97706"   # warning/costs
+C_RED    = "#DC2626"   # danger/negative
+C_TEAL   = "#0D9488"   # teal
+C_PURPLE = "#4F46E5"   # indigo
+C_NAVY   = "#1E293B"   # headings
+C_SLATE  = "#64748B"   # secondary text
+C_MUTED  = "#94A3B8"   # muted text
+C_BORDER = "#E2E8F0"   # borders
+C_WHITE  = "#FFFFFF"
 
 CHART_LAYOUT = dict(
     paper_bgcolor="rgba(0,0,0,0)",
     plot_bgcolor ="rgba(0,0,0,0)",
-    font         = dict(family="Inter,Arial,sans-serif", size=11),
-    margin       = dict(l=40, r=20, t=30, b=40),
+    font=dict(family="Inter,system-ui,-apple-system,sans-serif", size=11, color=C_NAVY),
+    margin=dict(l=8, r=8, t=30, b=8),
+    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1,
+                bgcolor="rgba(0,0,0,0)", font=dict(size=11)),
+    xaxis=dict(gridcolor="#F1F5F9", linecolor=C_BORDER, tickfont=dict(size=10),
+               showgrid=False, zeroline=False),
+    yaxis=dict(gridcolor="#F1F5F9", linecolor="rgba(0,0,0,0)", tickfont=dict(size=10),
+               showgrid=True, zeroline=False),
+    hoverlabel=dict(bgcolor=C_WHITE, bordercolor=C_BORDER,
+                    font=dict(family="Inter,system-ui,sans-serif", size=12, color=C_NAVY)),
 )
 
 
@@ -107,7 +121,7 @@ def _monthly_gst_trend(p: pd.DataFrame) -> pd.DataFrame:
 # DASH LAYOUT
 # ═════════════════════════════════════════════════════════════════════════════
 
-def _kpi_card(label: str, value: str, color: str = C_GREEN) -> html.Div:
+def _kpi_card(label: str, value: str, color: str = C_BLUE) -> html.Div:
     return html.Div([
         html.Div(label, style={"fontSize": "0.72rem", "color": "#6b7280", "fontWeight": 600,
                                "textTransform": "uppercase", "letterSpacing": "0.04em"}),
@@ -182,7 +196,7 @@ def _render_india_gst(p: pd.DataFrame, branch: str, start_date, end_date) -> htm
     gstr3b_table = html.Div([
         html.Div("GSTR-3B Summary (Input Tax Credit)", style={
             "fontWeight": 700, "fontSize": "0.9rem", "marginBottom": "0.75rem",
-            "color": C_GREEN}),
+            "color": C_NAVY}),
         html.Table([
             html.Thead(html.Tr([
                 html.Th("Tax Type"),
@@ -278,7 +292,7 @@ def _render_india_gst(p: pd.DataFrame, branch: str, start_date, end_date) -> htm
     return html.Div([
         # Header
         html.Div([
-            html.H4("GST Report — India", style={"margin": 0, "fontWeight": 700, "color": C_GREEN}),
+            html.H4("GST Report — India", style={"margin": 0, "fontWeight": 700, "color": C_NAVY}),
             html.Span("GSTR-3B Input Tax Credit Summary",
                       style={"fontSize": "0.78rem", "color": "#6b7280"}),
         ], style={"marginBottom": "1.2rem"}),

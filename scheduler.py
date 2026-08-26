@@ -459,6 +459,23 @@ def start_scheduler(engine: Any) -> None:
         name=f"KPI Threshold Check (every {THRESHOLD_HOURS}h)",
     )
 
+    # Nightly warehouse rebuild — orchestrated pipeline sweep across all tenants
+    # (also reconciles hard-deletes and refreshes serving marts). 02:30 daily.
+    def _job_warehouse_rebuild():
+        try:
+            import orchestrator as _orch
+            results = _orch.run_all(engine, trigger="schedule")
+            ok = sum(1 for r in results if r.get("status") == "success")
+            logger.info("[scheduler] nightly warehouse rebuild: %d/%d tenants ok", ok, len(results))
+        except Exception as exc:
+            logger.warning("[scheduler] warehouse rebuild failed: %s", exc)
+    _scheduler.add_job(
+        _job_warehouse_rebuild,
+        CronTrigger(hour=2, minute=30),
+        id="warehouse_rebuild", replace_existing=True,
+        name="Nightly Warehouse Rebuild (orchestrator)",
+    )
+
     _scheduler.start()
     logger.info("[scheduler] APScheduler started with %d jobs.", len(_scheduler.get_jobs()))
 

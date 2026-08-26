@@ -137,11 +137,12 @@ MODULE_LABELS = {
 }
 
 DOMAIN_OPTIONS = [
-    {"label": "💊 Pharmacy / Medical",    "value": "pharmacy"},
-    {"label": "🛍️ Retail / E-commerce",  "value": "retail"},
-    {"label": "💻 SaaS / Software",       "value": "saas"},
-    {"label": "📒 Accounting / Finance",  "value": "accounting"},
-    {"label": "📈 General Business",      "value": "generic"},
+    {"label": "💊 Pharmacy / Medical",     "value": "pharmacy"},
+    {"label": "🛍️ Retail / E-commerce",   "value": "retail"},
+    {"label": "💻 SaaS / Software",        "value": "saas"},
+    {"label": "📒 Accounting / Finance",   "value": "accounting"},
+    {"label": "🏥 Healthcare / Insurance", "value": "healthcare"},
+    {"label": "📈 General Business",       "value": "generic"},
 ]
 
 PLAN_OPTIONS = [

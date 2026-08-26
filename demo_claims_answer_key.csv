@@ -1,0 +1,76 @@
+issue,claim_id,provider_npi,source_id,note
+Duplicate,CLM506001,1437882805,CLM503119,duplicate of CLM503119
+Duplicate,CLM506002,1398471886,CLM504681,duplicate of CLM504681
+Duplicate,CLM506003,1636045484,CLM502593,duplicate of CLM502593
+Duplicate,CLM506004,1485451171,CLM502380,duplicate of CLM502380
+Duplicate,CLM506005,1530747414,CLM500199,duplicate of CLM500199
+Duplicate,CLM506006,1995619255,CLM501152,duplicate of CLM501152
+Duplicate,CLM506007,1919795579,CLM501573,duplicate of CLM501573
+Duplicate,CLM506008,1326541099,CLM500769,duplicate of CLM500769
+Duplicate,CLM506009,1384027113,CLM501645,duplicate of CLM501645
+Duplicate,CLM506010,1349957310,CLM505997,duplicate of CLM505997
+Duplicate,CLM506011,1414797776,CLM502353,duplicate of CLM502353
+Duplicate,CLM506012,1398704996,CLM501511,duplicate of CLM501511
+Duplicate,CLM506013,1210053353,CLM505623,duplicate of CLM505623
+Duplicate,CLM506014,1995619255,CLM503154,duplicate of CLM503154
+Duplicate,CLM506015,1128492780,CLM504590,duplicate of CLM504590
+Duplicate,CLM506016,1210053353,CLM501609,duplicate of CLM501609
+Duplicate,CLM506017,1835098955,CLM505022,duplicate of CLM505022
+Duplicate,CLM506018,1398362082,CLM505359,duplicate of CLM505359
+Duplicate,CLM506019,1414797776,CLM505497,duplicate of CLM505497
+Duplicate,CLM506020,1497478786,CLM503135,duplicate of CLM503135
+Duplicate,CLM506021,1349957310,CLM504816,duplicate of CLM504816
+Duplicate,CLM506022,1636045484,CLM505068,duplicate of CLM505068
+Duplicate,CLM506023,1485451171,CLM502819,duplicate of CLM502819
+Duplicate,CLM506024,1882893941,CLM503784,duplicate of CLM503784
+Duplicate,CLM506025,1596348124,CLM500779,duplicate of CLM500779
+High-$ outlier,CLM506026,1592688426,,36415 paid ~30 vs ~3
+High-$ outlier,CLM506027,1398704996,,36415 paid ~29 vs ~3
+High-$ outlier,CLM506028,1339670711,,36415 paid ~34 vs ~3
+High-$ outlier,CLM506029,1819595113,,36415 paid ~40 vs ~3
+High-$ outlier,CLM506030,1128492780,,36415 paid ~24 vs ~3
+High-$ outlier,CLM506031,1339670711,,36415 paid ~31 vs ~3
+High-$ outlier,CLM506032,1781802744,,36415 paid ~36 vs ~3
+High-$ outlier,CLM506033,1786579303,,36415 paid ~31 vs ~3
+High-$ outlier,CLM506034,1593303705,,80053 paid ~172 vs ~15
+High-$ outlier,CLM506035,1437882805,,80053 paid ~126 vs ~15
+High-$ outlier,CLM506036,1398704996,,80053 paid ~186 vs ~15
+High-$ outlier,CLM506037,1786579303,,71046 paid ~546 vs ~48
+High-$ outlier,CLM506038,1849621470,,93000 paid ~194 vs ~20
+High-$ outlier,CLM506039,1919795579,,80053 paid ~162 vs ~15
+High-$ outlier,CLM506040,1336696312,,93000 paid ~163 vs ~20
+High-$ outlier,CLM506041,1485451171,,80053 paid ~145 vs ~15
+High-$ outlier,CLM506042,1174684276,,80053 paid ~209 vs ~15
+High-$ outlier,CLM506043,1835098955,,71046 paid ~672 vs ~48
+High-$ outlier,CLM506044,1497478786,,93000 paid ~213 vs ~20
+High-$ outlier,CLM506045,1398704996,,93000 paid ~200 vs ~20
+Unit outlier,CLM506046,1596348124,,95 units of 20610
+Unit outlier,CLM506047,1896233790,,77 units of 80053
+Unit outlier,CLM506048,1530747414,,85 units of 36415
+Unit outlier,CLM506049,1592688426,,101 units of 80053
+Unit outlier,CLM506050,1210053353,,109 units of 36415
+Unit outlier,CLM506051,1437882805,,136 units of 36415
+Unit outlier,CLM506052,1128492780,,185 units of 80053
+Unit outlier,CLM506053,1326541099,,69 units of 20610
+Unit outlier,CLM506054,1344703907,,78 units of 80053
+Unit outlier,CLM506055,1734036506,,97 units of 20610
+Unit outlier,CLM506056,1398471886,,139 units of 80053
+Unit outlier,CLM506057,1849621470,,89 units of 80053
+Unit outlier,CLM506058,1326541099,,92 units of 20610
+Unit outlier,CLM506059,1787194506,,152 units of 80053
+Unit outlier,CLM506060,1349957310,,138 units of 20610
+Gender edit,CLM506061,1398471886,,male member billed obstetric 59400
+Gender edit,CLM506062,1781802744,,male member billed obstetric 59400
+Gender edit,CLM506063,1384027113,,male member billed obstetric 59400
+Gender edit,CLM506064,1786579303,,male member billed obstetric 59400
+Gender edit,CLM506065,1868820204,,male member billed obstetric 59400
+Gender edit,CLM506066,1398362082,,male member billed obstetric 59400
+Gender edit,CLM506067,1819595113,,male member billed obstetric 59400
+Gender edit,CLM506068,1882893941,,male member billed obstetric 59400
+Gender edit,CLM506069,1384027113,,male member billed obstetric 59400
+Gender edit,CLM506070,1719927151,,male member billed obstetric 59400
+Upcoding,—,1752420357,,Dr Upcoder 1 bills ~100% high-level E/M
+Upcoding,—,1830738671,,Dr Upcoder 2 bills ~100% high-level E/M
+Upcoding,—,1137500389,,Dr Upcoder 3 bills ~100% high-level E/M
+Provider outlier,—,1301104422,,Dr HighBiller 1 avg paid/claim far above peers
+Provider outlier,—,1326298377,,Dr HighBiller 2 avg paid/claim far above peers

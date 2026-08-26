@@ -1,0 +1,9 @@
+# Build + push the Dash admin image. Run from repo root:
+#   gcloud builds submit --config deploy/cb-dash.yaml \
+#     --substitutions=_IMAGE=REGION-docker.pkg.dev/PROJECT/insighthub/dash:latest .
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['build', '-f', 'deploy/Dockerfile.dash', '-t', '${_IMAGE}', '.']
+images: ['${_IMAGE}']
+options:
+  machineType: 'E2_HIGHCPU_8'

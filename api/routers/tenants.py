@@ -23,7 +23,7 @@ from typing import Annotated, List
 from fastapi import APIRouter, HTTPException, Query, status
 from sqlalchemy import delete, select
 
-from ..deps import AdminUser, DBSession
+from ..deps import AdminUser, CurrentUser, DBSession
 from ..domain_library import DEFAULT_MODULES
 from ..models import SchemaMapping, Tenant, TenantModule
 from ..schemas import (
@@ -93,6 +93,20 @@ async def list_tenants(
         q = q.where(Tenant.is_active == True)  # noqa: E712
     result = await db.execute(q)
     return result.scalars().all()
+
+
+@router.get("/mine", summary="Get the CURRENT user's own tenant (no admin needed)")
+async def my_tenant(user: CurrentUser, db: DBSession):
+    # Must be declared before /{tenant_id} so 'mine' isn't parsed as an id.
+    tid = getattr(user, "tenant_id", None)
+    if tid is None:
+        return None
+    res = await db.execute(select(Tenant).where(Tenant.id == tid))
+    t = res.scalar_one_or_none()
+    if not t:
+        return None
+    return {"id": t.id, "name": t.name, "slug": t.slug, "domain_type": t.domain_type,
+            "plan": t.plan, "contact_email": t.contact_email}
 
 
 @router.get("/{tenant_id}", response_model=TenantOut, summary="Get one tenant")

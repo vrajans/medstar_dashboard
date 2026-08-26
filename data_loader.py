@@ -250,6 +250,55 @@ def _parse_sales(filepath, branch, month_label):
 def _parse_purchase(filepath, branch, month_label):
     return _parse_purchase_from_raw(_read_raw(filepath), branch, month_label)
 
+def _detect_square_or_shopify(file_bytes: bytes, ext: str):
+    """
+    US-301/US-303: Detect and parse Square POS or Shopify CSV exports.
+    Returns (df_raw_compatible, report_type) or (None, None).
+    The returned df_raw is already in InsightHub sales schema (pre-parsed).
+    """
+    if ext != ".csv":
+        return None, None
+    try:
+        header_row = pd.read_csv(io.BytesIO(file_bytes), nrows=0).columns.tolist()
+        header_set = set(h.strip() for h in header_row)
+
+        from integrations.square_shopify import parse_square_csv, parse_shopify_csv
+
+        # Square fingerprint: unique column names from Square dashboard export
+        if any(c in header_set for c in ["Gross Sales", "Net Sales", "Device Name",
+                                          "Device Nickname", "Payment Type"]):
+            df = parse_square_csv(io.BytesIO(file_bytes))
+            if not df.empty:
+                # Translate to generic_sales df_raw format so build_preview works
+                df_out = df.rename(columns={
+                    "bill_date":   "date",
+                    "net_amount":  "amount",
+                    "item_name":   "item",
+                    "branch":      "location",
+                    "tax_amount":  "tax",
+                })
+                return df_out, "square_sales"
+
+        # Shopify fingerprint
+        if any(c in header_set for c in ["Financial Status", "Fulfillment Status",
+                                          "Lineitem quantity", "Paid at", "Lineitem name"]):
+            df = parse_shopify_csv(io.BytesIO(file_bytes))
+            if not df.empty:
+                df_out = df.rename(columns={
+                    "bill_date":  "date",
+                    "net_amount": "amount",
+                    "item_name":  "item",
+                    "branch":     "location",
+                    "tax_amount": "tax",
+                    "state":      "state",
+                })
+                return df_out, "shopify_sales"
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).warning("[parse_upload] Square/Shopify detect error: %s", exc)
+    return None, None
+
+
 def parse_upload(content_b64, filename, domain="pharmacy"):
     try:
         if "," in content_b64:
@@ -262,13 +311,27 @@ def parse_upload(content_b64, filename, domain="pharmacy"):
             df_raw = pd.read_csv(io.BytesIO(file_bytes), header=None)
         else:
             df_raw = _read_raw_from_bytes(file_bytes, ext)
+
+        # ── Pharmacy-specific detection (Marg / custom POS) ──
         report_type = detect_report_type(df_raw)
         if report_type:
             return df_raw, report_type, None
+
+        # ── US-301/303: Square POS & Shopify before generic fallback ──
+        sq_df, sq_type = _detect_square_or_shopify(file_bytes, ext)
+        if sq_df is not None and sq_type:
+            return sq_df, sq_type, None
+
+        # ── Generic CSV/XLSX fallback ──
         if domain != "pharmacy":
             report_type = detect_generic_report(df_raw)
             if report_type:
                 return df_raw, report_type, None
+        # Allow generic fallback even for pharmacy domain if columns look right
+        generic_type = detect_generic_report(df_raw)
+        if generic_type:
+            return df_raw, generic_type, None
+
         if domain == "pharmacy":
             msg = ("Could not detect report type. "
                    "Expected a Sales or Purchase report from the POS system.")
@@ -284,7 +347,8 @@ def build_preview(df_raw, report_type, branch, month_label):
         df = _parse_sales_from_raw(df_raw, branch, month_label)
     elif report_type == "purchase":
         df = _parse_purchase_from_raw(df_raw, branch, month_label)
-    elif report_type in ("generic_sales", "generic_purchases"):
+    elif report_type in ("generic_sales", "generic_purchases",
+                         "square_sales", "shopify_sales"):
         df = _parse_generic_from_raw(df_raw, branch, month_label)
     else:
         df = _parse_generic_from_raw(df_raw, branch, month_label)
@@ -388,7 +452,7 @@ def append_upload_to_db(store_data, engine, tenant_id=None, source="manual"):
         branch      = store_data["branch"]
         month_label = store_data["month_label"]
         filename    = store_data.get("filename", "uploaded_file")
-        if report_type in ("sales", "generic_sales"):
+        if report_type in ("sales", "generic_sales", "square_sales", "shopify_sales"):
             table = "sales"
         elif report_type in ("purchase", "generic_purchases"):
             table = "purchases"

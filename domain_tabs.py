@@ -32,18 +32,47 @@ import dash_bootstrap_components as dbc
 
 from domain_config import get_domain_config, get_currency_symbol
 
-# ── colour palette ──────────────────────────────────────────────────────────
+# ── InsightHub Design System v3 colour palette ──────────────────────────────
+C_BLUE   = "#2563EB"   # primary brand
+C_SKY    = "#0EA5E9"   # secondary accent
+C_TEAL   = "#0D9488"
+C_AMBER  = "#D97706"
+C_PURPLE = "#4F46E5"
+C_GREEN  = "#059669"
+C_NAVY   = "#1E293B"
+C_SLATE  = "#64748B"
+C_MUTED  = "#94A3B8"
+C_BORDER = "#E2E8F0"
+C_WHITE  = "#FFFFFF"
+C_BG     = "#F8FAFC"
+
+# All domains use the InsightHub brand blue as the primary accent
 _DOMAIN_COLORS = {
-    "pharmacy":   "#1e7e4b",
-    "saas":       "#0d6efd",
-    "retail":     "#fd7e14",
-    "accounting": "#6f42c1",
-    "generic":    "#6b7280",
+    "pharmacy":   C_BLUE,
+    "saas":       C_BLUE,
+    "retail":     C_AMBER,
+    "accounting": C_PURPLE,
+    "generic":    C_SLATE,
 }
+
+CHART_LAYOUT = dict(
+    paper_bgcolor="rgba(0,0,0,0)",
+    plot_bgcolor ="rgba(0,0,0,0)",
+    font=dict(family="Inter,system-ui,-apple-system,sans-serif", size=11, color=C_NAVY),
+    margin=dict(l=8, r=8, t=30, b=8),
+    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1,
+                bgcolor="rgba(0,0,0,0)", font=dict(size=11)),
+    xaxis=dict(gridcolor="#F1F5F9", linecolor=C_BORDER, tickfont=dict(size=10),
+               showgrid=False, zeroline=False),
+    yaxis=dict(gridcolor="#F1F5F9", linecolor="rgba(0,0,0,0)", tickfont=dict(size=10),
+               showgrid=True, zeroline=False),
+    hoverlabel=dict(bgcolor=C_WHITE, bordercolor=C_BORDER,
+                    font=dict(family="Inter,system-ui,sans-serif", size=12, color=C_NAVY)),
+)
 
 
 def _domain_color(domain: str) -> str:
-    return _DOMAIN_COLORS.get(domain, "#6b7280")
+    return _DOMAIN_COLORS.get(domain, C_BLUE)
 
 
 def _fmt_currency(value: float, symbol: str = "₹") -> str:
@@ -54,15 +83,23 @@ def _fmt_currency(value: float, symbol: str = "₹") -> str:
     return f"{symbol}{value:.0f}"
 
 
-def _card(title: str, value: str, subtitle: str = "", color: str = "#1e7e4b") -> dbc.Card:
-    """Minimal KPI card."""
-    return dbc.Card([
-        dbc.CardBody([
-            html.P(title, className="text-muted mb-1", style={"fontSize": "0.8rem"}),
-            html.H4(value, style={"color": color, "fontWeight": "700"}),
-            html.P(subtitle, className="text-muted mb-0", style={"fontSize": "0.75rem"}),
-        ])
-    ], className="shadow-sm mb-3")
+def _card(title: str, value: str, subtitle: str = "", color: str = C_BLUE) -> html.Div:
+    """Professional KPI card matching InsightHub design system."""
+    return html.Div([
+        html.Div(value, style={
+            "fontSize": "1.6rem", "fontWeight": 700, "color": color,
+            "lineHeight": 1.1, "letterSpacing": "-0.4px",
+        }),
+        html.Div(title, style={
+            "fontSize": "0.68rem", "color": C_SLATE, "fontWeight": 600,
+            "textTransform": "uppercase", "letterSpacing": "0.07em", "marginTop": "5px",
+        }),
+        html.Div(subtitle, style={"fontSize": "0.69rem", "color": C_MUTED, "marginTop": "3px"}),
+    ], style={
+        "background": C_WHITE, "borderRadius": "10px", "padding": "1rem 1.2rem",
+        "border": f"1px solid {C_BORDER}", "borderTop": f"3px solid {color}",
+        "boxShadow": "0 1px 3px rgba(15,23,42,0.07)",
+    })
 
 
 def _no_data_placeholder(domain: str) -> html.Div:
@@ -113,9 +150,9 @@ def render_domain_overview(
 
     kpi_cards = dbc.Row([
         dbc.Col(_card(labels["revenue"],      _fmt_currency(revenue, symbol), color=color),  md=2),
-        dbc.Col(_card(labels["cost"],         _fmt_currency(cost,    symbol), color="#dc3545"), md=2),
-        dbc.Col(_card(labels["margin"],       f"{margin:.1f}%",               color=color),  md=2),
-        dbc.Col(_card(labels["transactions"], f"{transactions:,}",            color="#0d6efd"), md=2),
+        dbc.Col(_card(labels["cost"],         _fmt_currency(cost,    symbol), color=C_AMBER), md=2),
+        dbc.Col(_card(labels["margin"],       f"{margin:.1f}%",               color=C_TEAL), md=2),
+        dbc.Col(_card(labels["transactions"], f"{transactions:,}",            color=C_SKY),  md=2),
         dbc.Col(_card(labels["top_entity"],   str(top_entity),                color=color),  md=2),
     ], className="mb-4")
 
@@ -162,7 +199,7 @@ def render_domain_overview(
     trend_fig.update_layout(
         title=f"{labels['revenue']} — Monthly Trend",
         xaxis_title="Month", yaxis_title=labels["revenue"],
-        plot_bgcolor="white", paper_bgcolor="white",
+        plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
         margin=dict(l=40, r=20, t=50, b=40),
         height=320,
     )
@@ -219,7 +256,7 @@ def render_domain_overview(
 
     compare_fig.update_layout(
         title=f"{labels['revenue']} vs {labels['cost']}",
-        barmode="group", plot_bgcolor="white", paper_bgcolor="white",
+        barmode="group", plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
         margin=dict(l=40, r=20, t=50, b=40), height=320,
     )
 
@@ -292,7 +329,7 @@ def render_domain_revenue(
             monthly.columns = ["month", "value"]
             fig = go.Figure([go.Bar(x=monthly["month"], y=monthly["value"], marker_color=color)])
             fig.update_layout(title=f"{labels['revenue']} by Month", height=300,
-                              plot_bgcolor="white", paper_bgcolor="white",
+                              plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
                               margin=dict(l=40, r=20, t=50, b=40))
             figs.append(dcc.Graph(figure=fig))
         except Exception:
@@ -308,7 +345,7 @@ def render_domain_revenue(
             )])
             fig2.update_layout(
                 title=f"Top {labels['top_entity']} by {labels['revenue']}",
-                height=320, plot_bgcolor="white", paper_bgcolor="white",
+                height=320, plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
                 margin=dict(l=120, r=20, t=50, b=40),
                 yaxis=dict(autorange="reversed"),
             )
@@ -372,7 +409,7 @@ def render_domain_costs(
             monthly.columns = ["month", "value"]
             fig = go.Figure([go.Bar(x=monthly["month"], y=monthly["value"], marker_color=color)])
             fig.update_layout(title=f"{labels['cost']} by Month", height=300,
-                              plot_bgcolor="white", paper_bgcolor="white",
+                              plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
                               margin=dict(l=40, r=20, t=50, b=40))
             figs.append(dcc.Graph(figure=fig))
         except Exception:
@@ -387,7 +424,7 @@ def render_domain_costs(
             )])
             fig2.update_layout(
                 title=f"Top Cost Sources",
-                height=320, plot_bgcolor="white", paper_bgcolor="white",
+                height=320, plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
                 margin=dict(l=120, r=20, t=50, b=40),
                 yaxis=dict(autorange="reversed"),
             )
@@ -447,7 +484,7 @@ def render_domain_customers(
             )])
             fig.update_layout(
                 title=f"Top Customers by {cfg['kpi_labels']['revenue']}",
-                height=400, plot_bgcolor="white", paper_bgcolor="white",
+                height=400, plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
                 margin=dict(l=140, r=20, t=50, b=40),
                 yaxis=dict(autorange="reversed"),
             )
@@ -463,7 +500,7 @@ def render_domain_customers(
             fig2 = px.pie(txn_count, values="count", names="customer",
                           title="Transaction Share by Customer",
                           color_discrete_sequence=px.colors.qualitative.Set2)
-            fig2.update_layout(height=380, paper_bgcolor="white",
+            fig2.update_layout(height=380, paper_bgcolor="rgba(0,0,0,0)",
                                margin=dict(l=20, r=20, t=50, b=20))
             figs.append(dcc.Graph(figure=fig2))
         except Exception:
@@ -555,7 +592,7 @@ def render_domain_cashflow(
 
         fig.update_layout(
             title="Monthly Cash Flow (Income vs Expenses)",
-            barmode="relative", plot_bgcolor="white", paper_bgcolor="white",
+            barmode="relative", plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
             margin=dict(l=40, r=20, t=50, b=40), height=380,
         )
 
@@ -618,7 +655,7 @@ def render_domain_inventory(
             )])
             fig.update_layout(
                 title="Top Items by Quantity",
-                height=350, plot_bgcolor="white", paper_bgcolor="white",
+                height=350, plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
                 margin=dict(l=140, r=20, t=50, b=40),
                 yaxis=dict(autorange="reversed"),
             )
@@ -633,7 +670,7 @@ def render_domain_inventory(
             fig2 = px.pie(top2, values="value", names="item",
                           title="Inventory Cost Distribution",
                           color_discrete_sequence=px.colors.qualitative.Set3)
-            fig2.update_layout(height=350, paper_bgcolor="white",
+            fig2.update_layout(height=350, paper_bgcolor="rgba(0,0,0,0)",
                                margin=dict(l=20, r=20, t=50, b=20))
             figs.append(dcc.Graph(figure=fig2))
         except Exception:

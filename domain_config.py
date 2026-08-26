@@ -251,6 +251,111 @@ DOMAIN_CONFIGS: dict[str, dict] = {
         ],
     },
 
+    # ── RESTAURANT / F&B ────────────────────────────────────────────────────
+    "restaurant": {
+        "label":       "Restaurant / F&B",
+        "icon":        "🍽️",
+        "color":       "#D97706",          # amber
+
+        "kpi_labels": {
+            "revenue":      "Total Revenue",
+            "cost":         "Food & Labor Cost",
+            "margin":       "Gross Margin",
+            "transactions": "Orders",
+            "top_entity":   "Top Item",
+            "secondary":    "Avg Ticket",
+        },
+
+        "kpi_units": {
+            "revenue":  "$",
+            "cost":     "$",
+            "margin":   "%",
+        },
+
+        "tabs": [
+            {"id": "overview",   "label": "Overview",        "icon": "📊"},
+            {"id": "revenue",    "label": "Revenue",         "icon": "💰"},
+            {"id": "menu",       "label": "Menu Analysis",   "icon": "🍴"},
+            {"id": "costs",      "label": "Cost Control",    "icon": "💸"},
+            {"id": "yoy",        "label": "Year on Year",    "icon": "📅"},
+            {"id": "ai_chat",    "label": "AI Insights",     "icon": "🤖"},
+            {"id": "upload",     "label": "Upload Data",     "icon": "📤"},
+        ],
+
+        "date_col":   "order_date",
+        "amount_col": "gross_sales",
+        "cost_col":   "food_cost",
+        "group_col":  "location",
+        "item_col":   "menu_item",
+
+        "column_signatures": [
+            "order_date", "menu_item", "gross_sales", "covers",
+            "food_cost", "labor_cost", "table_no", "ticket_size",
+        ],
+
+        "suggested_questions": [
+            "🍽️ What are our top 10 menu items by revenue?",
+            "💰 What is our food cost percentage?",
+            "📈 Show revenue trend by location",
+            "⏰ What time of day is busiest?",
+            "💸 What are our highest cost menu items?",
+            "⚠️ Are there any slow-moving items we should drop?",
+        ],
+    },
+
+    # ── HEALTHCARE / CLINIC ──────────────────────────────────────────────────
+    "healthcare": {
+        "label":       "Healthcare / Clinic",
+        "icon":        "🏥",
+        "color":       "#0D9488",          # teal
+
+        "kpi_labels": {
+            "revenue":      "Total Billings",
+            "cost":         "Operational Costs",
+            "margin":       "Net Margin",
+            "transactions": "Patient Visits",
+            "top_entity":   "Top Department",
+            "secondary":    "Avg Billing / Visit",
+        },
+
+        "kpi_units": {
+            "revenue":  "$",
+            "cost":     "$",
+            "margin":   "%",
+        },
+
+        "tabs": [
+            {"id": "overview",    "label": "Overview",         "icon": "📊"},
+            {"id": "revenue",     "label": "Billings",         "icon": "💰"},
+            {"id": "patients",    "label": "Patient Volume",   "icon": "👥"},
+            {"id": "departments", "label": "Departments",      "icon": "🏥"},
+            {"id": "costs",       "label": "Costs",            "icon": "💸"},
+            {"id": "yoy",         "label": "Year on Year",     "icon": "📅"},
+            {"id": "ai_chat",     "label": "AI Insights",      "icon": "🤖"},
+            {"id": "upload",      "label": "Upload Data",       "icon": "📤"},
+        ],
+
+        "date_col":   "visit_date",
+        "amount_col": "billed_amount",
+        "cost_col":   "cost_amount",
+        "group_col":  "department",
+        "item_col":   "procedure",
+
+        "column_signatures": [
+            "visit_date", "patient_id", "billed_amount", "department",
+            "procedure", "insurance", "diagnosis", "doctor",
+        ],
+
+        "suggested_questions": [
+            "🏥 Which department generates the most revenue?",
+            "👥 What is our patient volume trend?",
+            "💰 What is our average billing per visit?",
+            "📈 How has revenue grown year over year?",
+            "💸 What are our top cost drivers?",
+            "⚠️ Are there billing anomalies to review?",
+        ],
+    },
+
     # ── GENERIC (fallback) ───────────────────────────────────────────────────
     "generic": {
         "label":       "General Business",
@@ -311,6 +416,11 @@ FORMAT_TO_DOMAIN: dict[str, str] = {
     "square":          "retail",
     "shopify":         "retail",
     "saas_csv":        "saas",
+    "restaurant_csv":  "restaurant",
+    "toast_pos":       "restaurant",
+    "clover":          "restaurant",
+    "ehr_csv":         "healthcare",
+    "drchrono":        "healthcare",
     "generic_csv":     "generic",
     "custom_csv":      "generic",
 }
